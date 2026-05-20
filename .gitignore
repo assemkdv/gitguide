@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.local
+
+# editor/OS noise
+.DS_Store
+.vscode/
+.idea/
+
+# logs
+npm-debug.log*
