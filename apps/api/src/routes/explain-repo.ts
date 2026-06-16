@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express';
 import Groq from 'groq-sdk';
 import { getRepoInfo, getReadme, getRepoTree, getGoodFirstIssues, getFileContent } from '../lib/github';
-import { parseJsonCompletion } from '../lib/groq-json';
+import { parseJsonCompletion, GroqResponseError } from '../lib/groq-json';
 import { validateBody } from '../lib/validate';
 import { explainRepoSchema } from '../lib/schemas';
+import { explainRepoOutputSchema } from '../lib/output-schemas';
 import type { z } from 'zod';
 
 export const explainRepoRouter = Router();
@@ -95,15 +96,13 @@ RULES:
     if (signal.aborted) return;
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    const parsed = parseJsonCompletion<Record<string, any>>(raw);
+    const parsed = parseJsonCompletion(raw, explainRepoOutputSchema);
 
     const validPaths = new Set(tree);
-    const chosenEntrypoints = (parsed.entrypoints ?? []).filter((e: { path: string }) =>
-      validPaths.has(e.path),
-    );
+    const chosenEntrypoints = parsed.entrypoints.filter((e) => validPaths.has(e.path));
 
     const keyEntrypoints = await Promise.all(
-      chosenEntrypoints.map(async (e: { path: string; label: string }) => {
+      chosenEntrypoints.map(async (e) => {
         const content = await getFileContent(repoOwner, repoName, repoInfo.defaultBranch, e.path, signal);
         const loc = content ? content.split('\n').length : 0;
         return { path: e.path, label: e.label, loc };
@@ -125,6 +124,11 @@ RULES:
     });
   } catch (err) {
     if (signal.aborted) return;
+    if (err instanceof GroqResponseError) {
+      console.error('Explain repo: unusable model response:', err.message);
+      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
+      return;
+    }
     console.error('Explain repo error:', err);
     res.status(500).json({ error: 'Failed to explain repository' });
   }

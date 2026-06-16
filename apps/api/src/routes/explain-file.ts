@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import Groq from 'groq-sdk';
-import { parseJsonCompletion } from '../lib/groq-json';
+import { parseJsonCompletion, GroqResponseError } from '../lib/groq-json';
 import { validateBody } from '../lib/validate';
 import { explainFileSchema } from '../lib/schemas';
+import { explainFileOutputSchema, explainFileQuickOutputSchema } from '../lib/output-schemas';
 import type { z } from 'zod';
 
 export const explainFileRouter = Router();
@@ -61,9 +62,14 @@ RULES:
     if (signal.aborted) return;
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    res.json(parseJsonCompletion(raw));
+    res.json(parseJsonCompletion(raw, explainFileOutputSchema));
   } catch (err) {
     if (signal.aborted) return;
+    if (err instanceof GroqResponseError) {
+      console.error('Explain file: unusable model response:', err.message);
+      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
+      return;
+    }
     console.error('Explain file error:', err);
     res.status(500).json({ error: 'Failed to explain file' });
   }
@@ -108,9 +114,14 @@ Respond with ONLY valid JSON. No markdown, no code blocks, no extra text.
     if (signal.aborted) return;
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    res.json(parseJsonCompletion(raw));
+    res.json(parseJsonCompletion(raw, explainFileQuickOutputSchema));
   } catch (err) {
     if (signal.aborted) return;
+    if (err instanceof GroqResponseError) {
+      console.error('Quick explain file: unusable model response:', err.message);
+      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
+      return;
+    }
     console.error('Quick explain file error:', err);
     res.status(500).json({ error: 'Failed to quickly explain file' });
   }

@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import Groq from 'groq-sdk';
-import { parseJsonCompletion } from '../lib/groq-json';
+import { parseJsonCompletion, GroqResponseError } from '../lib/groq-json';
 import { validateBody } from '../lib/validate';
 import { analyzeSchema } from '../lib/schemas';
+import { analyzeOutputSchema } from '../lib/output-schemas';
 import type { z } from 'zod';
 
 export const analyzeRouter = Router();
@@ -91,9 +92,14 @@ RULES FOR difficulty and timeEstimate:
     if (signal.aborted) return;
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    res.json(parseJsonCompletion(raw));
+    res.json(parseJsonCompletion(raw, analyzeOutputSchema));
   } catch (err) {
     if (signal.aborted) return;
+    if (err instanceof GroqResponseError) {
+      console.error('Analysis: unusable model response:', err.message);
+      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
+      return;
+    }
     console.error('Analysis error:', err);
     res.status(500).json({ error: 'Failed to analyze issue' });
   }
