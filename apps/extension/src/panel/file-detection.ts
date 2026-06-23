@@ -1,7 +1,14 @@
 import { useStore } from './store';
-import { parseFileRouteFromUrl, extractFileContentFromDom, isFileContentReady, resolveFileRoute } from '../content/page-parser';
+import {
+  parseFileRouteFromUrl,
+  extractFileContentFromDom,
+  isFileContentReady,
+  resolveFileRoute,
+  resolveRefFromKnownNames,
+} from '../content/page-parser';
 import type { FileRouteInfo } from '../content/page-parser';
 import { fetchRawFileContent } from '../content/fetch-file';
+import { getRefNames } from '../content/refs-api';
 import { devLog } from './dev-log';
 
 export type { FileRouteInfo };
@@ -41,6 +48,11 @@ function teardown() {
  * already be available — immediately, on every DOM mutation, and again right before
  * trusting a raw-fetch result — so a slash-containing branch name never produces wrong
  * content or a wrong cache key, even though it's what makes the URL itself ambiguous.
+ * If that still leaves the naive guess uncorrected and the initial raw fetch fails,
+ * there's one more fallback: check the URL segments against the repo's actual
+ * branch/tag names via GitHub's API (`getRefNames`/`resolveRefFromKnownNames`) — this
+ * only fires in that specific failure case, so it doesn't cost anything for the common
+ * (non-slash-branch) path.
  */
 export function startFileDetection(route: FileRouteInfo, navStart: number): void {
   const myNavId = ++navId;
@@ -91,7 +103,7 @@ export function startFileDetection(route: FileRouteInfo, navStart: number): void
   // timeout) since it's normally the faster of the two.
   const fetchTarget = resolved;
   log(navStart, 'raw fetch started');
-  fetchRawFileContent(fetchTarget.repoOwner, fetchTarget.repoName, fetchTarget.ref, fetchTarget.filePath).then((raw) => {
+  fetchRawFileContent(fetchTarget.repoOwner, fetchTarget.repoName, fetchTarget.ref, fetchTarget.filePath).then(async (raw) => {
     if (myNavId !== navId) return;
 
     // Re-resolve before trusting this result — embedded page data may have appeared
@@ -110,9 +122,39 @@ export function startFileDetection(route: FileRouteInfo, navStart: number): void
     if (raw && isFileContentReady(raw)) {
       log(navStart, 'raw fetch completed');
       applyContent(raw, 'raw fetch');
-    } else {
-      log(navStart, 'raw fetch failed or returned no usable content — relying on DOM observer');
+      return;
     }
+
+    // The naive guess wasn't corrected by embedded data (either it's not present, or
+    // it agreed with the naive guess) and still failed — this is the actual signature
+    // of a slash-containing branch name GitHub's markup didn't help us catch. Fall back
+    // to checking the URL segments against the repo's real branch/tag names before
+    // giving up and relying on the DOM observer. Only worth trying when there's more
+    // than one path segment to disambiguate in the first place.
+    if (route.filePath.includes('/')) {
+      const knownRefs = await getRefNames(route.repoOwner, route.repoName);
+      if (myNavId !== navId) return;
+
+      const corrected = resolveRefFromKnownNames(route, knownRefs);
+      if (corrected) {
+        log(navStart, `ref corrected via branches/tags API fallback (${route.ref} -> ${corrected.ref})`);
+        resolved = corrected;
+        const retried = await fetchRawFileContent(
+          corrected.repoOwner,
+          corrected.repoName,
+          corrected.ref,
+          corrected.filePath,
+        );
+        if (myNavId !== navId) return;
+
+        if (retried && isFileContentReady(retried)) {
+          applyContent(retried, 'raw fetch (ref corrected via branches/tags API)');
+          return;
+        }
+      }
+    }
+
+    log(navStart, 'raw fetch failed or returned no usable content — relying on DOM observer');
   });
 
   // Diagnostic hard timeout: the DOM observer keeps running past this point in case of

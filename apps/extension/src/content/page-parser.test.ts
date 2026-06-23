@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { parseFileRouteFromUrl, isFileContentReady, resolveFileRoute } from './page-parser';
+import { parseFileRouteFromUrl, isFileContentReady, resolveFileRoute, resolveRefFromKnownNames } from './page-parser';
 
 function setPath(path: string) {
   window.history.pushState({}, '', path);
@@ -132,6 +132,50 @@ describe('resolveFileRoute', () => {
     // page during a Turbo transition.
     injectEmbeddedData('main', 'some/other/file.ts');
     expect(resolveFileRoute(route)).toEqual(route);
+  });
+});
+
+describe('resolveRefFromKnownNames', () => {
+  beforeEach(() => setPath('/'));
+
+  it('corrects a two-segment branch ref using the known branch/tag list', () => {
+    setPath('/owner/repo/blob/feature/auth/src/login.ts');
+    const route = parseFileRouteFromUrl()!;
+    expect(route).toEqual({ repoOwner: 'owner', repoName: 'repo', ref: 'feature', filePath: 'auth/src/login.ts' });
+
+    const knownRefs = ['main', 'feature/auth'];
+    expect(resolveRefFromKnownNames(route, knownRefs)).toEqual({
+      repoOwner: 'owner',
+      repoName: 'repo',
+      ref: 'feature/auth',
+      filePath: 'src/login.ts',
+    });
+  });
+
+  it('prefers the longest matching ref when multiple prefixes could match', () => {
+    setPath('/owner/repo/blob/release/v2/nested/CHANGELOG.md');
+    const route = parseFileRouteFromUrl()!;
+
+    // Both "release" and "release/v2" exist as branches — the longer one is correct.
+    const knownRefs = ['release', 'release/v2'];
+    expect(resolveRefFromKnownNames(route, knownRefs)).toEqual({
+      repoOwner: 'owner',
+      repoName: 'repo',
+      ref: 'release/v2',
+      filePath: 'nested/CHANGELOG.md',
+    });
+  });
+
+  it('returns null when no known ref matches any prefix of the path', () => {
+    setPath('/owner/repo/blob/main/src/index.ts');
+    const route = parseFileRouteFromUrl()!;
+    expect(resolveRefFromKnownNames(route, ['develop', 'release/v2'])).toBeNull();
+  });
+
+  it('returns null when the known ref list is empty', () => {
+    setPath('/owner/repo/blob/feature/auth/src/login.ts');
+    const route = parseFileRouteFromUrl()!;
+    expect(resolveRefFromKnownNames(route, [])).toBeNull();
   });
 });
 

@@ -126,6 +126,29 @@ export function resolveFileRoute(route: FileRouteInfo): FileRouteInfo {
   return { ...route, ref: embedded.ref, filePath: embedded.filePath };
 }
 
+/**
+ * Last-resort ref resolution for when embedded page data isn't available (GitHub
+ * changed its markup, or the payload hasn't rendered yet) and the naive single-segment
+ * guess turns out to be wrong. Checks the URL's path segments against the repo's real
+ * branch/tag names — fetched via `getRefNames` — preferring the longest match so
+ * "release/v2" isn't mistaken for a branch called "release". Returns null if nothing
+ * in `knownRefs` matches any prefix of the path, meaning this repo genuinely doesn't
+ * have a slash-containing ref here and the naive guess was right all along.
+ */
+export function resolveRefFromKnownNames(route: FileRouteInfo, knownRefs: string[]): FileRouteInfo | null {
+  if (knownRefs.length === 0) return null;
+  const refSet = new Set(knownRefs);
+  const segments = `${route.ref}/${route.filePath}`.split('/');
+
+  for (let i = segments.length - 1; i >= 1; i--) {
+    const candidateRef = segments.slice(0, i).join('/');
+    if (refSet.has(candidateRef)) {
+      return { ...route, ref: candidateRef, filePath: segments.slice(i).join('/') };
+    }
+  }
+  return null;
+}
+
 /** DOM-only extraction of the currently rendered file's content — used as the fallback
  * path when a direct raw-content fetch isn't available/fails. */
 export function extractFileContentFromDom(): string {
