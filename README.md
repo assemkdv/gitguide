@@ -191,6 +191,12 @@ cp .env.example .env
 [personal access token](https://github.com/settings/tokens) is enough to raise the
 GitHub API rate limit from 60/hour (unauthenticated) to 5,000/hour.
 
+The extension has its own, separate env var, read at build time (not runtime):
+
+| Variable       | Required | Default                 | Description                                                        |
+| -------------- | -------- | ------------------------ | -------------------------------------------------------------------- |
+| `VITE_API_URL` | No       | `http://localhost:3000` | Base URL the extension calls for all API requests. See `apps/extension/.env.example`; `apps/extension/.env.production` pins production builds to the deployed Render URL. |
+
 ## Running the backend
 
 ```bash
@@ -218,6 +224,11 @@ npm run build:extension
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked**
 → select `apps/extension/dist`. Open any GitHub repository and click the GitGuide
 launcher (bottom-right).
+
+`npm run build:extension` is a production build, so it talks to the deployed backend
+(`https://gitguide-api.onrender.com`, pinned via `apps/extension/.env.production`) —
+not your local API. If you want the unpacked extension to hit a locally running
+backend instead, run `VITE_API_URL=http://localhost:3000 npm run build --workspace=apps/extension`.
 
 Re-run `npm run build:extension` and click the reload icon on the extension card after
 making changes — the extension does not hot-reload itself. `npm run dev` inside
@@ -252,24 +263,32 @@ JSON-completion parsing. See **Known limitations** for what isn't covered.
 
 ## Deployment notes
 
-GitGuide is currently built for **local development use** — there is no hosted
-deployment target defined yet:
-
-- The backend reads `GROQ_API_KEY`/`PORT`/`GITHUB_TOKEN` from a `.env` file and is a
-  standard stateless Express app, so it would run on any Node host (Render, Fly.io,
-  a container, etc.) with those environment variables set — but CORS in `server.ts` is
-  currently restricted to `chrome-extension://*`, `https://github.com`, and
-  `http://localhost:5173`, and the extension's `manifest.json` hard-codes
-  `http://localhost:3000` as the API base. Deploying the backend anywhere other than
-  localhost requires updating both: the CORS allow-list in `apps/api/src/server.ts`
-  and `API_BASE` in `apps/extension/src/panel/{runActions.ts,storage.ts}` /
-  `host_permissions` in `manifest.json`, then rebuilding the extension.
-- The extension itself is only distributed as an unpacked build (`Load unpacked` in
-  developer mode) — publishing to the Chrome Web Store would require its own review/
-  packaging process not set up here.
-- No CI/CD pipeline is configured. `npm run lint`, `npm test`, and the two build
-  commands above are meant to be run manually (or wired into a CI provider of your
-  choice) before shipping a change.
+- **Backend**: deployed as a standard Node/Express service on Render at
+  `https://gitguide-api.onrender.com`, reading `GROQ_API_KEY`/`PORT`/`GITHUB_TOKEN` from
+  environment variables set in the Render dashboard (not a committed `.env`). It's a
+  stateless service, so it would run unmodified on any other Node host (Fly.io, a
+  container, etc.) too.
+- **Extension → backend URL**: the extension reads its API base from
+  `import.meta.env.VITE_API_URL` (see `apps/extension/src/config.ts`), falling back to
+  `http://localhost:3000` when unset. `apps/extension/.env.production` pins this to the
+  Render URL, so `npm run build:extension` (production mode) always targets the
+  deployed backend automatically — `npm run dev` (development mode) does not load that
+  file, so local dev keeps targeting `localhost:3000`. Override per-build by setting
+  `VITE_API_URL` yourself if you deploy to a different host.
+- **CORS**: `apps/api/src/server.ts` allows requests with no `Origin` header, any
+  `chrome-extension://*` origin, `https://github.com`, and `http://localhost:5173`.
+  The `chrome-extension://*` wildcard is intentional and temporary: the final Chrome
+  Web Store extension ID isn't known yet (the extension is only distributed unpacked so
+  far), and `chrome-extension://` origins can't be forged by ordinary web pages, so
+  accepting any extension ID is a reasonable stand-in until the ID is fixed. **Once the
+  extension has a permanent Web Store ID, tighten this regex to that exact origin**
+  (`chrome-extension://<final-id>`) instead of the current wildcard.
+- The extension itself is still only distributed as an unpacked build (`Load unpacked`
+  in developer mode) — publishing to the Chrome Web Store would require its own
+  review/packaging process not set up here.
+- No CI/CD pipeline is configured. `npm run lint`, `npm test`, and the build commands
+  above are meant to be run manually (or wired into a CI provider of your choice)
+  before shipping a change.
 
 ## Performance
 

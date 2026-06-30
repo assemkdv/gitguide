@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:3000';
+import { API_BASE_URL } from '../config';
 
 interface ChatMessage {
   message: string;
@@ -24,7 +24,7 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener(async (msg: ChatMessage) => {
     try {
-      const response = await fetch(`${API_BASE}/v1/chat`, {
+      const response = await fetch(`${API_BASE_URL}/v1/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(msg),

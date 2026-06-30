@@ -10,9 +10,9 @@ import {
   saveGoodFirstIssuesCache,
 } from './storage';
 import { devLog } from './dev-log';
+import { API_BASE_URL } from '../config';
 
-const API_BASE = 'http://localhost:3000';
-const NETWORK_ERROR = 'Could not reach the GitGuide API. Make sure the server is running on port 3000.';
+const NETWORK_ERROR = 'Could not reach the GitGuide API.';
 
 export async function runExplainRepo(ctx: PageContext): Promise<void> {
   const repoKey = repoKeyOf(ctx.repoOwner, ctx.repoName);
@@ -30,7 +30,7 @@ export async function runExplainRepo(ctx: PageContext): Promise<void> {
       setRepoResult(cached);
       return;
     }
-    const res = await fetch(`${API_BASE}/v1/explain-repo`, {
+    const res = await fetch(`${API_BASE_URL}/v1/explain-repo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repoOwner: ctx.repoOwner, repoName: ctx.repoName }),
@@ -85,7 +85,7 @@ export async function runExplainFile(ctx: PageContext): Promise<void> {
     // (larger model, more tokens) keeps running. Guarded so a slow/failed quick pass
     // can never clobber a full result that already landed or apply to a file the user
     // has since navigated away from.
-    fetch(`${API_BASE}/v1/explain-file/quick`, {
+    fetch(`${API_BASE_URL}/v1/explain-file/quick`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repoOwner: ctx.repoOwner, repoName: ctx.repoName, filePath: ctx.filePath, fileContent: ctx.fileContent }),
@@ -99,7 +99,7 @@ export async function runExplainFile(ctx: PageContext): Promise<void> {
       })
       .catch(() => {});
 
-    const res = await fetch(`${API_BASE}/v1/explain-file`, {
+    const res = await fetch(`${API_BASE_URL}/v1/explain-file`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repoOwner: ctx.repoOwner, repoName: ctx.repoName, filePath: ctx.filePath, fileContent: ctx.fileContent }),
@@ -139,7 +139,7 @@ export async function runSummarizeIssue(ctx: PageContext): Promise<void> {
       setIssueResult(cached);
       return;
     }
-    const res = await fetch(`${API_BASE}/v1/analyze`, {
+    const res = await fetch(`${API_BASE_URL}/v1/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -179,7 +179,7 @@ export async function runGoodFirstIssues(ctx: PageContext): Promise<void> {
       setGoodFirstIssuesResult(cached);
       return;
     }
-    const res = await fetch(`${API_BASE}/v1/good-first-issues`, {
+    const res = await fetch(`${API_BASE_URL}/v1/good-first-issues`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repoOwner: ctx.repoOwner, repoName: ctx.repoName }),
