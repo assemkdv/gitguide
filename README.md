@@ -1,32 +1,26 @@
 # GitGuide
 
-GitGuide is a Chrome extension that helps you understand a GitHub repository without
-leaving the page. Open a repo, a file, or an issue, hit a button, and GitGuide gives
-you a clear, structured explanation of what you're looking at — powered by an LLM
-running on a small backend, not a browser API key.
+GitGuide is a Chrome extension I built to make exploring unfamiliar GitHub repos way
+less painful. Instead of jumping between the README, the file tree, and a dozen open
+tabs trying to figure out how a project fits together, GitGuide explains it to you
+right inside GitHub. Click a button and get a clear breakdown of the repo, the file
+you're looking at, or the issue you're trying to understand.
 
-It's built for anyone who's ever landed on an unfamiliar repo and wanted to know
-"okay, but where do I even start?" — new contributors, developers exploring open
-source, or anyone triaging an issue they didn't write.
+I built this because I kept landing on cool open source repos, wanting to contribute,
+and having no idea where to start reading. The docs are usually out of date or just
+missing. Figuring out if an issue is actually beginner friendly means reading through
+code and comment threads by hand. GitGuide does that legwork for you.
 
 ## What it does
 
-- **Explain Repository** — purpose, tech stack, architecture, and where to start reading
-- **Explain File** — what a file does, its key pieces, and how it fits into the project
-- **Summarize Issue** — what's being asked, which files are relevant, and how to approach it
-- **Find Good First Issue** — surfaces open `good first issue` / `help wanted` issues
-- **Chat** — ask follow-up questions grounded in whatever GitGuide already explained
-- **Just works as you browse** — detects GitHub's page changes automatically, no reload
-- **Fast on repeat visits** — results are cached, so re-opening something you already explained is instant
-- **Streams responses** — chat answers appear as they're generated, not all at once
-
-## Why it exists
-
-Open source repos are often harder to get into than they should be. Docs go stale,
-architecture isn't written down anywhere, and figuring out whether an issue is
-actually approachable usually means reading through code and old discussion threads
-by hand. GitGuide skips that step — it reads the repo for you and gives you a
-grounded starting point, right where you're already working.
+- **Explain Repository**: what it is, the tech stack, how it's structured, and where to start reading
+- **Explain File**: what a file does and how it connects to the rest of the project
+- **Summarize Issue**: what's actually being asked and how you'd approach fixing it
+- **Find Good First Issue**: surfaces open `good first issue` / `help wanted` issues
+- **Chat**: ask follow-up questions, grounded in whatever GitGuide already explained
+- **Detects GitHub navigation automatically**: GitHub doesn't reload the page when you click around, so GitGuide watches for those changes itself and keeps up
+- **Caches everything**: open a file or repo you already explained again and it loads instantly
+- **Streams chat responses**: answers show up as they're generated, not all at once
 
 ## Tech stack
 
@@ -36,11 +30,12 @@ grounded starting point, right where you're already working.
 | Backend   | Node.js, Express, Groq SDK, Zod                                        |
 | Tooling   | npm workspaces, Vitest, ESLint                                         |
 
-## How it's built
+## How it's put together
 
-GitGuide is a small monorepo: a Chrome extension that lives on the page, and a
-lightweight backend that talks to Groq and the GitHub API on its behalf (so your Groq
-key never ends up in the browser).
+It's a small monorepo. The extension lives on the page, and a lightweight backend
+talks to Groq and the GitHub API. I didn't want a Groq API key sitting in the browser
+where anyone could pull it out of the extension bundle, so all the AI calls happen
+server side.
 
 ```
 Chrome Extension  →  Backend  →  Groq (LLM)
@@ -48,15 +43,14 @@ Chrome Extension  →  Backend  →  Groq (LLM)
                    GitHub REST API
 ```
 
-- The **extension** watches for GitHub page changes, renders the panel, and calls the
-  backend whenever you trigger an action.
-- The **backend** validates the request, pulls whatever GitHub context it needs, and
-  asks Groq to generate the explanation.
-- **Groq** does the actual reasoning/writing.
-- The **GitHub API** supplies repo, file, and issue data.
+- The **extension** watches GitHub for page changes, renders the panel, and calls the backend when you hit an action.
+- The **backend** checks the request, pulls whatever context it needs from GitHub, and asks Groq to explain it.
+- **Groq** does the actual thinking.
+- The **GitHub API** supplies the repo, file, and issue data behind all of it.
 
-Curious how the pieces fit together internally? See [How it works under the
-hood](#how-it-works-under-the-hood) below.
+Want more detail? The section below, [The hard parts](#the-hard-parts), covers how
+file detection races the DOM, how request cancellation works, and how I handled
+branch names with slashes in them.
 
 ## Getting started
 
@@ -84,9 +78,9 @@ cp .env.example .env
 
 | Variable       | Required | Default | What it's for                                                    |
 | -------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `GROQ_API_KEY` | Yes      | —       | The API won't start without it.                                       |
+| `GROQ_API_KEY` | Yes      | none    | The API won't start without it.                                       |
 | `PORT`         | No       | `3000`  | Port the local API listens on.                                        |
-| `GITHUB_TOKEN` | No       | —       | Optional PAT, bumps GitHub's rate limit from 60/hr to 5,000/hr. No special scopes needed for public repos. |
+| `GITHUB_TOKEN` | No       | none    | Bumps GitHub's rate limit from 60/hr to 5,000/hr. Public-repo access only, no special scopes needed. |
 
 ### 3. Start the backend
 
@@ -94,11 +88,11 @@ cp .env.example .env
 npm run dev:api
 ```
 
-Runs on `http://localhost:3000` with hot reload. Sanity check:
+Runs on `http://localhost:3000` with hot reload. Quick check it's alive:
 `curl http://localhost:3000/health` → `{"ok":true}`.
 
-(It's a plain Node/Express server, in case the "backend" naming ever gets confused
-with something Python-flavored — no Python involved anywhere here.)
+It's a Node and Express server, not Python. I know "backend" sometimes gets read as
+FastAPI, but there's no Python anywhere in this project.
 
 ### 4. Load the extension
 
@@ -107,31 +101,32 @@ npm run build:extension
 ```
 
 Then in Chrome: `chrome://extensions` → **Developer mode** → **Load unpacked** →
-select `apps/extension/dist`. Open any GitHub repo and you'll see the GitGuide
-launcher bottom-right.
+select `apps/extension/dist`. Open any GitHub repo and the GitGuide launcher shows up
+in the bottom-right corner.
 
-This build points at the deployed backend by default — see [Deployment](#deployment)
-if you want it hitting your local server instead. There's no hot reload for the
-extension itself, so rebuild and hit the reload icon on the extension card after
-making changes.
+This build points at my deployed backend by default. Check the
+[Deployment](#deployment) section if you want it pointed at your own local server
+instead. The extension doesn't hot-reload, so after making changes you'll need to
+rebuild and click the reload icon on the extension card in Chrome.
 
 ## Testing
 
 ```bash
 npm run lint    # ESLint across both apps
-npm test        # vitest — apps/api then apps/extension
+npm test        # vitest, runs apps/api then apps/extension
 ```
 
-Tests focus on the logic that's actually worth unit testing — URL/ref parsing, cache
-scoping, store behavior, stale-request cancellation, request validation, and response
-parsing. What's *not* covered is called out in [Known limitations](#known-limitations).
+I focused testing on the logic that actually needed it: URL and ref parsing, cache
+scoping, store behavior, request cancellation, validation, response parsing. I'm not
+going to pretend everything's covered. What's missing is listed in
+[Known limitations](#known-limitations).
 
 ---
 
-## How it works under the hood
+## The hard parts
 
-A closer look at how the two apps are structured and a few of the trickier problems
-GitGuide had to solve along the way.
+A few problems here looked simple at first and turned out not to be. This is the part
+I'm actually proud of.
 
 ```
 ┌─────────────────────────────┐        ┌──────────────────────────┐
@@ -151,70 +146,73 @@ GitGuide had to solve along the way.
 └─────────────────────────────┘        └──────────────────────────┘
 ```
 
-### The extension
+### Getting the extension to feel native to GitHub
 
-The panel is a React app that mounts into a shadow DOM on every GitHub page, so its
-styles never leak into GitHub's own UI. A couple of small scripts run in the page's
-own JS context (not the usual sandboxed content-script world) so they can catch
-GitHub's client-side navigation as it happens and hook keyboard shortcuts at the same
-priority as GitHub's own. That's what lets GitGuide react to you clicking around
-GitHub without ever doing a full page reload.
+The panel renders inside a shadow DOM, so none of my CSS fights with GitHub's. The
+harder part was navigation. GitHub is a single-page app, so clicking between files
+never triggers a real page load, and GitHub doesn't tell you when that happens
+either. So I patch `history.pushState` myself, running that code in the page's own JS
+context instead of the sandboxed one Chrome normally gives extensions. That way I
+catch every navigation the second it happens and re-render the panel without anyone
+reloading anything.
 
-Chat is the one exception that needs a background service worker: streaming a
-response chunk-by-chunk from a content script isn't straightforward in Chrome, so the
-service worker proxies the SSE stream over to the panel.
+Chat needed a different workaround. Content scripts can't cleanly consume a streaming
+fetch response and forward it piece by piece, so chat goes through a background
+service worker instead, which proxies the stream back to the panel over a port.
 
-**Opening a file** is the fussiest part of the extension. GitGuide doesn't wait for
-GitHub to finish rendering — it parses the file path straight from the URL and kicks
-off a raw content fetch immediately, racing it against a DOM observer as a fallback.
-The one wrinkle: a branch name like `release/v2` looks identical to a nested file path
-from the URL alone, so GitGuide double-checks itself against a small JSON payload
-GitHub already embeds in the page, and corrects course if the fast guess was wrong.
+### The one that took the longest: opening a file
 
-If you navigate away before any of this finishes, GitGuide throws the in-flight work
-away instead of letting it clobber whatever you're now looking at.
+I didn't want GitGuide sitting around waiting for GitHub to finish rendering the code
+viewer. So it grabs the file path straight from the URL and fires off a raw content
+fetch immediately. If that fails, a DOM observer catches it as backup.
+
+Here's the catch. A branch called `release/v2` looks exactly like a nested file path
+if you're only looking at the URL. Take `/blob/release/v2/CHANGELOG.md`. Is the ref
+`release` and the path `v2/CHANGELOG.md`? Or is the ref `release/v2` and the path just
+`CHANGELOG.md`? You genuinely can't tell from the URL alone.
+
+I ended up solving it two ways. GitHub actually embeds the real ref and path as JSON
+right in the page, so I read that whenever it's there. If it's missing, maybe GitHub
+changed the markup, maybe the page just hasn't finished rendering yet, I fall back to
+checking the URL against the repo's real branch and tag names through GitHub's API.
+Between the two, slash branches resolve correctly almost every time.
+
+And if you navigate away before any of this finishes, the old request just gets
+dropped. I track navigations with an incrementing ID, so a slow response from a page
+you already left can never overwrite what you're looking at now.
 
 ### The backend
 
-One Express route per feature (`/v1/explain-repo`, `/v1/explain-file`, `/v1/analyze`,
-`/v1/good-first-issues`, `/v1/chat`), each doing the same basic thing: validate the
-request with [Zod](https://zod.dev), fetch whatever GitHub context it needs, build a
-prompt, and call Groq. `/v1/chat` is the only one that streams its response back over
-SSE instead of returning a single JSON blob.
+One Express route per feature, and they all follow the same shape. Validate the
+request with [Zod](https://zod.dev), pull whatever GitHub context is needed, build a
+prompt, call Groq. `/v1/chat` is the odd one out. It streams over SSE instead of
+returning one JSON blob.
 
-A few things worth calling out:
+A few parts of the backend I spent real time getting right:
 
-- **Bad requests get rejected immediately.** Every route validates its input before
-  doing any work, so a malformed request comes back as a clean `400` instead of a
-  confusing failure three steps later.
-- **Cancelled requests actually stop.** If you close the panel or navigate away before
-  a response finishes, the backend notices the connection dropped and cancels the
-  in-flight GitHub/Groq calls instead of burning tokens on a response nobody will see.
-- **Results are cached client-side.** Repo/file/issue explanations are stored in
-  `chrome.storage.local`, scoped so different branches or files never share a stale
-  cache entry, with a TTL so old entries clean themselves up.
+- **Bad input fails fast.** Every route checks the request before doing any real work. A malformed request gets a clean `400` back immediately instead of failing halfway through an expensive Groq call.
+- **Cancelled requests actually stop.** If you close the panel or navigate away mid-request, the backend notices the connection dropped and cancels whatever GitHub or Groq calls were still running. No point burning tokens on a response nobody will see.
+- **A bad model response degrades instead of crashing.** Every field in a Groq response gets checked against a schema. If one field comes back wrong, it falls back to a safe default instead of failing the whole request. Only a completely broken response returns an error.
+- **Results get cached on the extension side**, scoped so a different branch or file never accidentally reuses someone else's cached explanation.
 
 ## Deployment
 
-The backend is deployed as a plain Node/Express service on Render, at
-`https://gitguide-api.onrender.com` — nothing fancy, just environment variables set
-in the Render dashboard and a stateless app that would run the same way on Fly.io or
-anywhere else.
+The backend runs on Render at `https://gitguide-api.onrender.com`. It's a plain Node
+and Express service reading its config from environment variables, so it would run
+the same way on Fly.io or anywhere else.
 
-The extension picks up its API URL at build time via `VITE_API_URL`, falling back to
-`http://localhost:3000` if it's not set. Production builds (`npm run build:extension`)
-are pinned to the Render URL through `apps/extension/.env.production`; local dev
-builds are untouched and keep talking to `localhost:3000`. To point an unpacked build
-at your own backend: `VITE_API_URL=http://localhost:3000 npm run build --workspace=apps/extension`.
+The extension picks up its API URL at build time (`VITE_API_URL`), defaulting to
+`http://localhost:3000`. Production builds are pinned to the Render URL
+automatically. Local dev keeps talking to `localhost:3000` unless you override it:
+`VITE_API_URL=http://localhost:3000 npm run build --workspace=apps/extension`.
 
-On the backend side, CORS is currently open to any `chrome-extension://` origin, since
-the extension isn't published to the Chrome Web Store yet and doesn't have a
-permanent ID. That's safe in practice (that scheme can't be spoofed by a regular
-website), but once GitGuide has a real Web Store ID, that should be locked down to
-the exact extension ID in `apps/api/src/server.ts`.
+CORS accepts any `chrome-extension://` origin right now, because I haven't published
+to the Chrome Web Store yet and don't have a permanent extension ID to lock it down
+to. A regular website can't fake that origin, so it's a reasonable stopgap for now.
+Once GitGuide has a real Web Store ID, I want to restrict `apps/api/src/server.ts` to
+that exact ID.
 
-There's no CI/CD set up — `npm run lint`, `npm test`, and the build commands below are
-run by hand for now.
+There's no CI/CD yet. I run lint, tests, and builds by hand before shipping anything.
 
 | Command                                                    | What it does                                            |
 | ------------------------------------------------------------ | ---------------------------------------------------------- |
@@ -225,39 +223,32 @@ run by hand for now.
 
 ## Performance
 
-Below are informal, single-run timings against the live API — real numbers, but one
-sample each, so treat them as a rough feel rather than a benchmark:
+These are informal, single-run timings against the live API. Real numbers, but one
+sample each, so treat them as a rough feel rather than an actual benchmark:
 
 | Operation                                  | Observed (single run) |
 | -------------------------------------------- | ---------------------- |
-| Explain File — quick pass                    | ~0.5s                  |
-| Explain File — full pass                     | ~1.0s                  |
+| Explain File (quick pass)                    | ~0.5s                  |
+| Explain File (full pass)                     | ~1.0s                  |
 | Summarize Issue                              | ~1.1s                  |
 | Explain Repository                           | *(see TODO below)*     |
 | Cached result load (`chrome.storage.local`)  | *(see TODO below)*     |
 
-**TODO — proper benchmarking.** Explain Repository does several GitHub API calls plus
-per-file fetches before Groq is even involved, so its latency swings a lot with repo
-size — it wasn't reliably measurable yet (one attempt hit a transient network
-timeout). To get real numbers: add timing around the GitHub-fetch and Groq-call phases
-in each route, run a fixed set of small/medium/large repos several times each and
-report p50/p90, and measure `storage.ts`'s cache reads directly (should be single-digit
-milliseconds, but hasn't been confirmed).
+**TODO: proper benchmarking.** Explain Repository does several GitHub calls plus
+per-file fetches before Groq is even involved, so its latency depends a lot on repo
+size. I haven't measured it reliably yet, one attempt hit a transient network timeout
+mid-run. To do this properly, I'd add timing around the GitHub-fetch and Groq-call
+phases in each route, run a fixed set of small, medium, and large repos a few times
+each, and report p50 and p90. I'd also want to measure the cache reads in
+`storage.ts` directly. They should be single-digit milliseconds, but I haven't
+confirmed that.
 
 ## Known limitations
 
-- **No end-to-end tests.** Unit tests cover the pure logic (URL parsing, ref
-  resolution, cache keys, cancellation), but there's no Playwright/Puppeteer suite
-  driving an actual GitHub page — SPA navigation is verified manually for now.
-- **Private repos aren't fully supported.** The backend can use a `GITHUB_TOKEN` for
-  its own calls, but the extension's raw-content fetch and DOM fallback have no auth
-  path, so Explain File may come up empty on a private repo.
-- **Slash-branch detection depends on GitHub's page markup staying the same.** It
-  works today by reading a JSON payload GitHub embeds on file pages; if GitHub changes
-  that markup, it'll quietly fall back to a naive (and for slash-branches, wrong)
-  guess instead of erroring loudly.
-- **API responses aren't schema-validated.** Requests are; a malformed model response
-  currently just fails with a 500 rather than degrading gracefully.
-- **Cancellation is connection-based, not explicit.** The backend stops working when
-  the client disconnects, but there's no dedicated "cancel this request" signal from
-  the extension — closing the connection is the only way to cancel right now.
+This isn't finished, and here's what's still missing:
+
+- **No end-to-end tests.** Unit tests cover the pure logic: URL parsing, ref resolution, cache keys, cancellation. There's no Playwright suite driving a real GitHub page yet. I've been checking SPA navigation by hand.
+- **Private repos aren't fully supported.** The backend can use a `GITHUB_TOKEN` for its own GitHub calls, but the extension's file-content fetch has no way to authenticate. Explain File can come up empty on a private repo.
+- **Slash-branch detection isn't a guarantee.** Two fallback layers cover it well today, but they're both heuristics working around a URL that's genuinely ambiguous. GitHub doesn't promise this will always resolve correctly.
+- **A malformed model response still means an incomplete one.** Missing or bad fields get filled in with safe defaults, but if Groq returns something that isn't valid JSON at all, that's still an error instead of a recovered response.
+- **Cancellation only happens when the connection drops.** There's no explicit "cancel this request" signal yet. Closing the connection is the only way to cancel one for now.
