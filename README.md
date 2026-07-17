@@ -1,7 +1,15 @@
 # GitGuide
 
-GitGuide is a Chrome extension that explains GitHub repos, files, and issues right
-inside the page.
+[![CI](https://github.com/assemkdv/gitguide/actions/workflows/ci.yml/badge.svg)](https://github.com/assemkdv/gitguide/actions/workflows/ci.yml)
+
+GitGuide is a Chrome extension that turns any public GitHub repo into something you can
+actually get oriented in within minutes: it explains the repository, a file, or an
+issue right on the page, and answers follow-up questions grounded in the real source
+code — with citations back to the exact file and line, not a generic model guess.
+
+> **Suggested GitHub repository description:** "AI-powered Chrome extension that
+> explains GitHub repos, files, and issues, and answers grounded, cited questions about
+> the code — right on the page."
 
 I built it because I kept landing on repos I wanted to contribute to and had no idea
 where to start. Docs are usually stale or missing, and figuring out if an issue is
@@ -13,33 +21,19 @@ actually approachable means reading through code and comment threads by hand.
 - **Explain File**: what it does and how it fits into the project
 - **Summarize Issue**: what's being asked and how you'd approach it
 - **Find Good First Issue**: surfaces open `good first issue` / `help wanted` issues
-- **Ask GitGuide**: chat grounded in the repo's actual source code, with citations
-  that link straight back to the file and line range on GitHub
+- **Ask GitGuide**: chat grounded in the repo's actual source code, with citations that
+  link straight back to the file and line range on GitHub, and follow-up questions that
+  stay in context within that repository's conversation
 - **Caching**: re-open something you already explained and it's instant
 - **Streaming**: chat answers show up as they're generated
 
 ## Tech stack
 
-| Layer     | Technologies                                                        |
+| Layer     | Technologies                                                          |
 | --------- | ---------------------------------------------------------------------- |
 | Extension | TypeScript, React, Zustand, Vite (`@crxjs/vite-plugin`), Manifest V3   |
 | Backend   | Node.js, Express, Groq SDK, Zod                                        |
-| Tooling   | npm workspaces, Vitest, ESLint                                         |
-
-## How it works
-
-Small monorepo. The extension lives on the page, the backend talks to Groq and the
-GitHub API so the Groq key never ends up in the browser.
-
-```
-Chrome Extension  →  Backend  →  Groq (LLM)
-                         ↓
-                   GitHub REST API
-```
-
-The extension watches for GitHub page changes and calls the backend on each action.
-The backend validates the request, pulls context from GitHub, and asks Groq to
-explain it.
+| Tooling   | npm workspaces, Vitest, ESLint, GitHub Actions (CI)                    |
 
 ## Getting started
 
@@ -67,8 +61,25 @@ npm run lint
 npm test
 ```
 
-Covers URL/ref parsing, cache scoping, cancellation, and request validation. No
-end-to-end tests yet, see [Known limitations](#known-limitations).
+Covers URL/ref parsing, cache scoping, cancellation, request validation,
+GitHub-identifier validation, and streaming abort behavior. No end-to-end tests yet,
+see [Known limitations](#known-limitations). These are the same checks GitHub Actions
+runs on every pull request and push to `main` (see the badge at the top).
+
+## How it works
+
+Small monorepo. The extension lives on the page, the backend talks to Groq and the
+GitHub API so the Groq key never ends up in the browser.
+
+```
+Chrome Extension  →  Backend  →  Groq (LLM)
+                         ↓
+                   GitHub REST API
+```
+
+The extension watches for GitHub page changes and calls the backend on each action.
+The backend validates the request, pulls context from GitHub, and asks Groq to
+explain it.
 
 ## The tricky part
 
@@ -117,6 +128,12 @@ under the key `owner/repo@<branch-head-sha>` — resolved fresh via the GitHub A
 request — so a new commit on that branch is a different cache key and always triggers a
 rebuild; a stale index is never served.
 
+**Conversations are scoped per repository.** Each question sends the recent exchange
+(up to the last 12 turns) as conversation history, so a follow-up like "what does that
+function call?" resolves naturally without re-stating context. Switching to a different
+repository (or branch) starts a fresh conversation instead of carrying over the
+previous one's history.
+
 **Known limitations, worth knowing before relying on this in production:**
 - The index cache is in-process and in-memory only (LRU-evicted, a handful of repos at
   a time) — nothing is persisted to disk. A server restart or Render cold start empties
@@ -162,7 +179,11 @@ permanent Web Store ID yet. Once it does, set `ALLOWED_EXTENSION_IDS` (comma-sep
 extension ID(s)) in the API's environment so it only accepts that origin — see
 `.env.example`.
 
-No CI/CD. Lint, tests, and builds run by hand for now.
+GitHub Actions runs CI — lint, typecheck, the full test suite, and both production
+builds — on every pull request and every push to `main` (see the badge at the top, or
+`.github/workflows/ci.yml`). This is CI, not CD: it validates the code but doesn't
+deploy anything itself. Render deploys the backend from `main` independently, so a
+green CI run before merging is the actual safeguard — Render doesn't enforce it.
 
 ## Known limitations
 
