@@ -18,7 +18,18 @@ let extractorPromise: Promise<FeatureExtractionPipeline> | null = null;
 
 function getExtractor(): Promise<FeatureExtractionPipeline> {
   if (!extractorPromise) {
-    extractorPromise = pipeline('feature-extraction', MODEL_ID, { dtype: 'q8' }) as Promise<FeatureExtractionPipeline>;
+    // onnxruntime-node's default CPU memory arena never releases memory back to the OS —
+    // it retains the high-water mark of every allocation it's ever made for the life of
+    // the process, so RSS creeps upward (and can spike into the GBs on a single large
+    // batch) across the many sequential embedTexts() calls a repo indexing run makes.
+    // Disabling it makes ORT malloc/free per tensor instead, which measured flat at
+    // ~200MB regardless of batch size — comfortably inside Render's 512MB free tier,
+    // versus 2GB+ with the arena on. Fixed weight-loading cost aside, this is a fixed
+    // ONNX-level toggle, not an architecture change.
+    extractorPromise = pipeline('feature-extraction', MODEL_ID, {
+      dtype: 'q8',
+      session_options: { enableCpuMemArena: false, enableMemPattern: false },
+    }) as Promise<FeatureExtractionPipeline>;
   }
   return extractorPromise;
 }
