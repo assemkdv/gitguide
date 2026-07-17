@@ -27,10 +27,14 @@ app.get('/health', (_req, res) => {
 
 // Comma-separated list of published extension IDs allowed to call this API, e.g.
 // "abcdefghijklmnopabcdefghijklmnop". Unset in dev; must be set once the extension is
-// published so this can stop accepting every chrome-extension:// origin.
+// published so this can stop accepting every chrome-extension:// origin. Tolerates the
+// id being pasted as a bare id or as a full "chrome-extension://<id>" origin (an easy
+// copy-paste mistake from the Web Store dashboard/chrome://extensions) — normalizing it
+// here means a correctly-published id still matches regardless of which form someone
+// pasted, without accepting anything a bare-id config wouldn't already accept.
 const allowedExtensionIds = (process.env.ALLOWED_EXTENSION_IDS ?? '')
   .split(',')
-  .map((id) => id.trim())
+  .map((id) => id.trim().replace(/^chrome-extension:\/\//, ''))
   .filter(Boolean);
 
 app.use(
@@ -49,6 +53,16 @@ app.use(
       if (isAllowedExtension || origin === 'https://github.com' || origin === 'http://localhost:5173') {
         callback(null, true);
       } else {
+        // Log the actual rejected origin server-side (never to the client) — the two
+        // extension-originated origins this API expects are https://github.com (content
+        // script actions: explain-repo/file, analyze, good-first-issues — content scripts
+        // are CORS-restricted to the injected page's own origin since MV3, host_permissions
+        // no longer exempts them) and chrome-extension://<id> (the background service
+        // worker, which relays /v1/chat and /v1/ask-repo and isn't subject to that
+        // restriction). Without logging which one showed up, a mismatch here is
+        // undiagnosable from Render's logs alone, e.g. a stale/incorrect
+        // ALLOWED_EXTENSION_IDS after the extension gets a new published id.
+        console.error(`CORS: rejected origin ${JSON.stringify(origin)}`);
         callback(new Error('Not allowed by CORS'));
       }
     },

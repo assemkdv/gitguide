@@ -73,4 +73,18 @@ describe('CORS origin gate with ALLOWED_EXTENSION_IDS configured', () => {
     expect(disallowed.status).toBe(500);
     expect(disallowed.text).toContain('Not allowed by CORS');
   });
+
+  it('still matches when ALLOWED_EXTENSION_IDS is pasted as a full chrome-extension:// origin instead of a bare id', async () => {
+    // A plausible copy-paste from the Web Store dashboard or chrome://extensions, which
+    // shows the id but is easy to grab alongside its "chrome-extension://" prefix.
+    process.env.ALLOWED_EXTENSION_IDS = 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    vi.resetModules();
+    const { app: scopedApp } = await import('./server');
+
+    const res = await request(scopedApp)
+      .post('/v1/good-first-issues')
+      .set('Origin', 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+      .send({});
+    expect(res.status).toBe(400); // passed CORS, failed schema validation
+  });
 });
