@@ -14,6 +14,8 @@ actually approachable means reading through code and comment threads by hand.
 - **Summarize Issue**: what's being asked and how you'd approach it
 - **Find Good First Issue**: surfaces open `good first issue` / `help wanted` issues
 - **Chat**: follow-up questions grounded in whatever GitGuide already explained
+- **Ask Repository**: chat grounded in the repo's actual source code, with citations
+  that link straight back to the file and line range on GitHub
 - **Caching**: re-open something you already explained and it's instant
 - **Streaming**: chat answers show up as they're generated
 
@@ -85,14 +87,78 @@ The backend validates every request with Zod, cancels in-flight GitHub/Groq call
 you navigate away mid-request, and degrades a malformed model response field by field
 instead of failing the whole request.
 
+## Ask Repository (RAG chat)
+
+Unlike Chat (grounded only in whatever GitGuide already generated — a repo/file/issue
+summary), Ask Repository answers questions from the repository's actual source. It's a
+small retrieval-augmented generation (RAG) pipeline, streamed over the same SSE
+mechanism as Chat, that runs entirely in the API — no data leaves the server except the
+question and the retrieved excerpts sent to Groq.
+
+**Retrieval is hybrid.** Each indexed file is chunked (regex-based, preferring to cut at
+a function/class boundary over an arbitrary line) and embedded locally — no external
+embeddings API — via a small (~25MB quantized) sentence-embedding model
+(`Xenova/all-MiniLM-L6-v2`) run in-process through `@huggingface/transformers`. Those
+embeddings back a cosine-similarity ("semantic") ranking. In parallel, a small in-house
+BM25 index provides a lexical ranking, which catches exact identifier/keyword matches
+that a pure embedding search can miss. The two rankings are merged with Reciprocal Rank
+Fusion (RRF) — combining rank *position* rather than raw scores, since cosine similarity
+and BM25 scores aren't on comparable scales — with a per-file cap so one large file
+can't occupy every citation slot. Citations shown in the panel are computed directly
+from these retrieved chunks, never parsed out of the model's own output, so they can't
+be hallucinated or mismatched.
+
+**Indexing is two-phase and keyed by commit SHA.** The first question against a repo
+triggers "Phase A": a small priority subset (README, `docs/`, manifests, likely
+entrypoints, plus files matching keywords from the question) is fetched, chunked, and
+embedded synchronously — fast enough to answer in a few seconds. The rest of the repo
+(up to a file cap) continues indexing in the background ("Phase B") afterward; the panel
+shows an "indexing in the background" note on partial answers, and later questions
+automatically benefit from Phase B's results with no action needed. The index is cached
+under the key `owner/repo@<branch-head-sha>` — resolved fresh via the GitHub API on every
+request — so a new commit on that branch is a different cache key and always triggers a
+rebuild; a stale index is never served.
+
+**Known limitations, worth knowing before relying on this in production:**
+- The index cache is in-process and in-memory only (LRU-evicted, a handful of repos at
+  a time) — nothing is persisted to disk. A server restart or Render cold start empties
+  it, and the next question on any repo pays the full Phase A cost again.
+- The embedding model itself isn't bundled — `@huggingface/transformers` downloads it
+  from Hugging Face on first use and keeps it in memory for the process's lifetime. On
+  Render's ephemeral filesystem, that means a fresh ~25MB download on every cold
+  start/redeploy unless the cache is baked into the build image, which isn't set up yet.
+- `/v1/ask-repo` is rate-limited tighter than the other routes (15 requests / 15 min per
+  IP) since a cache miss can trigger a full repository index, not just one completion.
+- As with the rest of the API, `ALLOWED_EXTENSION_IDS` (see
+  [Deployment](#deployment)) must be set once the extension has a published Web Store
+  ID — otherwise the API accepts this endpoint from any `chrome-extension://` origin.
+
+**Manually testing it:**
+1. `npm run dev:api`, load the extension pointed at it (see
+   [Getting started](#getting-started)).
+2. Open a public GitHub repo, open the panel, click **Ask Repository**.
+3. Ask something concrete the code should answer, e.g. "where is authentication
+   implemented?" — an answer should stream in with citation chips underneath; click one
+   and confirm it opens the exact file and line range on GitHub.
+4. Pick a repo with more than ~30 indexable files and ask a question immediately after
+   opening it — the answer should show "Indexing the rest of the repository in the
+   background…"; wait a few seconds and ask a second, more obscure question to confirm
+   citations can now come from outside the initial priority set.
+5. Ask a follow-up question in the same session and confirm it uses conversation history
+   (e.g. "what does that function call?").
+6. Switch to a different repo (or branch) mid-conversation and confirm Ask Repository's
+   history resets rather than answering from the previous repo's index.
+
 ## Deployment
 
 Backend runs on Render (`https://gitguide-api.onrender.com`), a plain Node/Express
 service. The extension picks up its API URL at build time via `VITE_API_URL`,
 defaulting to `localhost:3000`; production builds are pinned to the Render URL.
 
-CORS currently accepts any `chrome-extension://` origin since the extension has no
-permanent Web Store ID yet. That'll get locked down once it does.
+CORS accepts any `chrome-extension://` origin by default since the extension has no
+permanent Web Store ID yet. Once it does, set `ALLOWED_EXTENSION_IDS` (comma-separated
+extension ID(s)) in the API's environment so it only accepts that origin — see
+`.env.example`.
 
 No CI/CD. Lint, tests, and builds run by hand for now.
 
@@ -103,3 +169,5 @@ No CI/CD. Lint, tests, and builds run by hand for now.
 - Slash-branch detection has two fallbacks but isn't a guarantee
 - A totally broken model response still returns an error instead of degrading
 - Cancellation only happens when the connection drops, no explicit cancel signal
+- Ask Repository's index cache is in-memory and cold-starts on every deploy/restart —
+  see [Ask Repository](#ask-repository-rag-chat) for details

@@ -6,6 +6,7 @@ import { chatRouter } from './routes/chat';
 import { explainRepoRouter } from './routes/explain-repo';
 import { explainFileRouter } from './routes/explain-file';
 import { goodFirstIssuesRouter } from './routes/good-first-issues';
+import { askRepoRouter } from './routes/ask-repo';
 
 export const app = express();
 
@@ -55,6 +56,9 @@ export const V1_RATE_LIMIT = 60;
 // /v1/chat streams tokens and is the cheapest to hammer relative to perceived value —
 // keep it under a tighter budget than the other one-shot endpoints.
 export const CHAT_RATE_LIMIT = 20;
+// /v1/ask-repo can trigger a full repository index build (not just one completion), so
+// it gets the tightest budget of all.
+export const ASK_REPO_RATE_LIMIT = 15;
 
 app.use('/v1', createRateLimit(RATE_LIMIT_WINDOW_MS, V1_RATE_LIMIT));
 
@@ -63,3 +67,4 @@ app.use('/v1/chat', createRateLimit(RATE_LIMIT_WINDOW_MS, CHAT_RATE_LIMIT), chat
 app.use('/v1/explain-repo', explainRepoRouter);
 app.use('/v1/explain-file', explainFileRouter);
 app.use('/v1/good-first-issues', goodFirstIssuesRouter);
+app.use('/v1/ask-repo', createRateLimit(RATE_LIMIT_WINDOW_MS, ASK_REPO_RATE_LIMIT), askRepoRouter);

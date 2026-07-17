@@ -51,13 +51,63 @@ describe('resetResults', () => {
     expect(s.goodFirstIssuesError).toBeNull();
   });
 
-  it('does not touch pageContext or chat state', () => {
+  it('does not touch pageContext, chat, or ask-repo state', () => {
     const pageContext = { repoOwner: 'o', repoName: 'r', page: 'repo' as const };
-    useStore.setState({ pageContext, chatMessages: [{ role: 'user', content: 'hi' }] });
+    useStore.setState({
+      pageContext,
+      chatMessages: [{ role: 'user', content: 'hi' }],
+      askRepoMessages: [{ role: 'user', content: 'where is auth' }],
+    });
 
     useStore.getState().resetResults();
 
     expect(useStore.getState().pageContext).toBe(pageContext);
     expect(useStore.getState().chatMessages).toHaveLength(1);
+    expect(useStore.getState().askRepoMessages).toHaveLength(1);
+  });
+});
+
+describe('ask-repo actions', () => {
+  beforeEach(() => {
+    useStore.setState(useStore.getInitialState());
+  });
+
+  it('appendToLastAskRepoMessage only mutates a trailing assistant message', () => {
+    useStore.getState().addAskRepoMessage({ role: 'user', content: 'where is auth?' });
+    useStore.getState().appendToLastAskRepoMessage('should be ignored');
+    expect(useStore.getState().askRepoMessages[0].content).toBe('where is auth?');
+
+    useStore.getState().addAskRepoMessage({ role: 'assistant', content: '' });
+    useStore.getState().appendToLastAskRepoMessage('It is in ');
+    useStore.getState().appendToLastAskRepoMessage('src/auth.ts');
+    expect(useStore.getState().askRepoMessages[1].content).toBe('It is in src/auth.ts');
+  });
+
+  it('setLastAskRepoMessageCitations sets citations only on a trailing assistant message', () => {
+    const citations = [{ path: 'src/auth.ts', startLine: 1, endLine: 10, url: 'https://github.com/o/r/blob/main/src/auth.ts#L1-L10' }];
+
+    useStore.getState().addAskRepoMessage({ role: 'user', content: 'q' });
+    useStore.getState().setLastAskRepoMessageCitations(citations);
+    expect(useStore.getState().askRepoMessages[0].citations).toBeUndefined();
+
+    useStore.getState().addAskRepoMessage({ role: 'assistant', content: '' });
+    useStore.getState().setLastAskRepoMessageCitations(citations);
+    expect(useStore.getState().askRepoMessages[1].citations).toEqual(citations);
+  });
+
+  it('setLastAskRepoMessageIndexingStatus sets status only on a trailing assistant message', () => {
+    useStore.getState().addAskRepoMessage({ role: 'assistant', content: '' });
+    useStore.getState().setLastAskRepoMessageIndexingStatus('partial');
+    expect(useStore.getState().askRepoMessages[0].indexingStatus).toBe('partial');
+  });
+
+  it('resetAskRepo clears messages, input, and streaming state', () => {
+    useStore.setState({ askRepoMessages: [{ role: 'user', content: 'q' }], askRepoInput: 'typing', askRepoStreaming: true });
+    useStore.getState().resetAskRepo();
+
+    const s = useStore.getState();
+    expect(s.askRepoMessages).toEqual([]);
+    expect(s.askRepoInput).toBe('');
+    expect(s.askRepoStreaming).toBe(false);
   });
 });

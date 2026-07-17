@@ -1,15 +1,6 @@
-const GITHUB_API = 'https://api.github.com';
+import { IGNORED_DIR_SEGMENTS } from './ignore-list';
 
-const IGNORED_DIR_SEGMENTS = new Set([
-  'node_modules',
-  'dist',
-  'build',
-  '.git',
-  'vendor',
-  'coverage',
-  '.next',
-  '.turbo',
-]);
+const GITHUB_API = 'https://api.github.com';
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
@@ -36,6 +27,22 @@ export async function getRepoInfo(owner: string, repo: string, signal?: AbortSig
     language: data.language ?? null,
     topics: Array.isArray(data.topics) ? data.topics : [],
   };
+}
+
+// The literal commit SHA at the tip of `branch` — used as the RAG index's cache key so
+// a new commit (any file changed) automatically invalidates the cached index for that
+// branch. `branch` is inserted unencoded (consistent with getRepoTree below) since
+// GitHub's ref path accepts slash-containing branch names as literal path segments.
+export async function getBranchHeadSha(owner: string, repo: string, branch: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/git/refs/heads/${branch}`,
+    { headers: authHeaders(), signal },
+  );
+  if (!res.ok) throw new Error(`GitHub ref lookup failed: ${res.status}`);
+  const data: any = await res.json();
+  const sha = data?.object?.sha;
+  if (typeof sha !== 'string' || !sha) throw new Error('GitHub ref lookup returned no sha');
+  return sha;
 }
 
 export async function getReadme(owner: string, repo: string, signal?: AbortSignal): Promise<string> {

@@ -79,11 +79,41 @@ describe('storage cache scoping and lifecycle', () => {
     store.set('cache:repo:owner/repo', { data: {}, savedAt: now - 100, expiresAt: now - 1 }); // expired
     store.set('cache:file:owner/repo:main:a.ts', { data: {}, savedAt: now, expiresAt: now + 100_000 }); // fresh
     store.set('chat:owner/repo', [{ role: 'user', content: 'hi' }]); // never pruned — no TTL
+    store.set('askrepo:owner/repo', [{ role: 'user', content: 'where is auth' }]); // never pruned — no TTL
 
     await pruneExpiredCache();
 
     expect(store.has('cache:repo:owner/repo')).toBe(false);
     expect(store.has('cache:file:owner/repo:main:a.ts')).toBe(true);
     expect(store.has('chat:owner/repo')).toBe(true);
+    expect(store.has('askrepo:owner/repo')).toBe(true);
+  });
+
+  it('round-trips ask-repo messages under their own key, separate from chat history', async () => {
+    const { loadRepoAskMessages, saveRepoAskMessages, clearRepoAskMessages, loadRepoChatMessages } = await import('./storage');
+    const messages = [
+      { role: 'user' as const, content: 'where is auth?' },
+      {
+        role: 'assistant' as const,
+        content: 'It is in src/auth.ts [1].',
+        citations: [{ path: 'src/auth.ts', startLine: 1, endLine: 10, url: 'https://github.com/owner/repo/blob/main/src/auth.ts#L1-L10' }],
+        indexingStatus: 'complete' as const,
+      },
+    ];
+
+    await saveRepoAskMessages('owner/repo', messages);
+
+    expect(await loadRepoAskMessages('owner/repo')).toEqual(messages);
+    expect(await loadRepoChatMessages('owner/repo')).toEqual([]); // distinct key namespace
+
+    await clearRepoAskMessages('owner/repo');
+    expect(await loadRepoAskMessages('owner/repo')).toEqual([]);
+  });
+
+  it('returns [] for ask-repo messages when the stored value is not an array', async () => {
+    const { loadRepoAskMessages } = await import('./storage');
+    store.set('askrepo:owner/repo', 'not-an-array');
+
+    expect(await loadRepoAskMessages('owner/repo')).toEqual([]);
   });
 });

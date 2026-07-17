@@ -50,3 +50,23 @@ export const chatSchema = z.object({
     .max(20)
     .optional(),
 });
+
+export const askRepoSchema = z.object({
+  question: nonEmptyString.max(2000),
+  context: z.object({
+    repoOwner: repoSegment,
+    repoName: repoSegment,
+    // Only set on file pages (mirrors PageContext.fileRef); omitted otherwise, in which
+    // case the route falls back to the repo's default branch.
+    ref: z.string().max(200).optional(),
+  }),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().max(4000),
+      }),
+    )
+    .max(12)
+    .optional(),
+});

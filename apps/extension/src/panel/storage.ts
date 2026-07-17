@@ -1,4 +1,4 @@
-import type { AnalysisResult, ChatMessage, ExplainFileResult, ExplainRepoResult, GoodFirstIssueItem } from './store';
+import type { AnalysisResult, AskRepoMessage, ChatMessage, ExplainFileResult, ExplainRepoResult, GoodFirstIssueItem } from './store';
 
 const REPO_CACHE_TTL_MS = 30 * 60 * 1000;
 const TARGET_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -107,5 +107,25 @@ export async function saveRepoChatMessages(repoKey: string, messages: ChatMessag
 
 export async function clearRepoChatMessages(repoKey: string): Promise<void> {
   const key = `chat:${repoKey}`;
+  await chrome.storage.local.remove(key);
+}
+
+// Same no-TTL, persist-until-cleared pattern as chat above (the closest analog — this
+// is conversational too), under its own key prefix so it doesn't collide with it or
+// get swept by pruneExpiredCache (which only touches cache:*).
+export async function loadRepoAskMessages(repoKey: string): Promise<AskRepoMessage[]> {
+  const key = `askrepo:${repoKey}`;
+  const result = await chrome.storage.local.get(key);
+  const messages = result[key];
+  return Array.isArray(messages) ? (messages as AskRepoMessage[]) : [];
+}
+
+export async function saveRepoAskMessages(repoKey: string, messages: AskRepoMessage[]): Promise<void> {
+  const key = `askrepo:${repoKey}`;
+  await chrome.storage.local.set({ [key]: messages });
+}
+
+export async function clearRepoAskMessages(repoKey: string): Promise<void> {
+  const key = `askrepo:${repoKey}`;
   await chrome.storage.local.remove(key);
 }

@@ -74,13 +74,23 @@ function AskGitGuideIcon() {
   );
 }
 
+function AskRepoIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M10.7 10.7 L14 14" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function HomeView() {
-  const { pageContext, setView, chatMessages } = useStore();
+  const { pageContext, setView, chatMessages, askRepoMessages } = useStore();
 
   if (!pageContext) return null;
 
   const handleActionClick = (action: ActionSpec) => action.run(pageContext);
   const hasExistingChat = chatMessages.length > 0;
+  const hasExistingAskRepo = askRepoMessages.length > 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
@@ -94,7 +104,7 @@ export function HomeView() {
         ))}
       </div>
 
-      <div style={{ padding: '4px 16px 16px' }}>
+      <div style={{ padding: '4px 16px 4px' }}>
         <button
           onClick={() => setView('chat')}
           style={{
@@ -132,6 +142,49 @@ export function HomeView() {
             </div>
             <div style={{ fontSize: 10.5, color: C.mutedDim, lineHeight: 1.4, marginTop: 1 }}>
               {hasExistingChat ? 'Pick up where you left off' : 'Ask custom questions about this repository'}
+            </div>
+          </div>
+        </button>
+      </div>
+
+      <div style={{ padding: '4px 16px 16px' }}>
+        <button
+          onClick={() => setView('ask-repo')}
+          style={{
+            width: '100%',
+            textAlign: 'left',
+            background: C.bgSec,
+            border: `1px solid ${C.borderMuted}`,
+            borderRadius: 9,
+            padding: '10px 12px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <span
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 7,
+              background: C.bgTer,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: C.muted,
+              flexShrink: 0,
+            }}
+          >
+            <AskRepoIcon />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: C.text, lineHeight: 1.3 }}>
+              {hasExistingAskRepo ? 'Continue Ask Repository' : 'Ask Repository'}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.mutedDim, lineHeight: 1.4, marginTop: 1 }}>
+              Search the codebase, get cited answers
             </div>
           </div>
         </button>
