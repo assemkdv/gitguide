@@ -1,9 +1,9 @@
 import { useEffect, useRef, KeyboardEvent } from 'react';
 import { useStore, repoKeyOf, Citation } from '../store';
-import { loadRepoAskMessages, saveRepoAskMessages, clearRepoAskMessages } from '../storage';
+import { loadRepoChatMessages, saveRepoChatMessages, clearRepoChatMessages } from '../storage';
 import { BackButton, SC as C } from './shared';
 
-interface AskRepoStreamEvent {
+interface ChatStreamEvent {
   type: string;
   content?: string;
   message?: string;
@@ -11,21 +11,21 @@ interface AskRepoStreamEvent {
   indexing?: 'partial' | 'complete';
 }
 
-export function AskRepoPage() {
+export function AskGitGuidePage() {
   const {
     pageContext,
     goToQuickActions,
-    askRepoMessages,
-    askRepoInput,
-    askRepoStreaming,
-    setAskRepoInput,
-    addAskRepoMessage,
-    appendToLastAskRepoMessage,
-    setLastAskRepoMessageCitations,
-    setLastAskRepoMessageIndexingStatus,
-    setAskRepoMessages,
-    setAskRepoStreaming,
-    resetAskRepo,
+    chatMessages,
+    chatInput,
+    chatStreaming,
+    setChatInput,
+    addChatMessage,
+    appendToLastChatMessage,
+    setLastChatMessageCitations,
+    setLastChatMessageIndexingStatus,
+    setChatMessages,
+    setChatStreaming,
+    resetChat,
   } = useStore();
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -38,10 +38,10 @@ export function AskRepoPage() {
   useEffect(() => {
     if (!repoKey || loadedForRef.current === repoKey) return;
     loadedForRef.current = repoKey;
-    loadRepoAskMessages(repoKey).then((stored) => {
-      if (loadedForRef.current === repoKey) setAskRepoMessages(stored);
+    loadRepoChatMessages(repoKey).then((stored) => {
+      if (loadedForRef.current === repoKey) setChatMessages(stored);
     });
-    // setAskRepoMessages is a zustand action — stable across renders, safe to omit.
+    // setChatMessages is a zustand action — stable across renders, safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repoKey]);
 
@@ -57,7 +57,7 @@ export function AskRepoPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [askRepoMessages]);
+  }, [chatMessages]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -72,17 +72,17 @@ export function AskRepoPage() {
   }, []);
 
   const handleSend = () => {
-    const text = askRepoInput.trim();
-    if (!text || askRepoStreaming || !pageContext || !repoKey) return;
+    const text = chatInput.trim();
+    if (!text || chatStreaming || !pageContext || !repoKey) return;
 
-    setAskRepoInput('');
-    addAskRepoMessage({ role: 'user', content: text });
-    saveRepoAskMessages(repoKey, useStore.getState().askRepoMessages);
+    setChatInput('');
+    addChatMessage({ role: 'user', content: text });
+    saveRepoChatMessages(repoKey, useStore.getState().chatMessages);
 
-    addAskRepoMessage({ role: 'assistant', content: '' });
-    setAskRepoStreaming(true);
+    addChatMessage({ role: 'assistant', content: '' });
+    setChatStreaming(true);
 
-    const port = chrome.runtime.connect({ name: 'ask-repo-stream' });
+    const port = chrome.runtime.connect({ name: 'chat-stream' });
     portRef.current = port;
     port.postMessage({
       question: text,
@@ -93,31 +93,31 @@ export function AskRepoPage() {
       },
     });
 
-    port.onMessage.addListener((msg: AskRepoStreamEvent) => {
+    port.onMessage.addListener((msg: ChatStreamEvent) => {
       if (msg.type === 'citations' && msg.citations) {
-        setLastAskRepoMessageCitations(msg.citations);
+        setLastChatMessageCitations(msg.citations);
       } else if (msg.type === 'status' && msg.indexing) {
-        setLastAskRepoMessageIndexingStatus(msg.indexing);
+        setLastChatMessageIndexingStatus(msg.indexing);
       } else if (msg.type === 'chunk' && msg.content) {
-        appendToLastAskRepoMessage(msg.content);
+        appendToLastChatMessage(msg.content);
       } else if (msg.type === 'done' || msg.type === 'error') {
         if (msg.type === 'error') {
-          appendToLastAskRepoMessage('\n\n*Error: ' + (msg.message ?? 'Unknown error') + '*');
+          appendToLastChatMessage('\n\n*Error: ' + (msg.message ?? 'Unknown error') + '*');
         }
-        setAskRepoStreaming(false);
+        setChatStreaming(false);
         port.disconnect();
         if (portRef.current === port) portRef.current = null;
-        saveRepoAskMessages(repoKey, useStore.getState().askRepoMessages);
+        saveRepoChatMessages(repoKey, useStore.getState().chatMessages);
       }
     });
 
-    port.onDisconnect.addListener(() => setAskRepoStreaming(false));
+    port.onDisconnect.addListener(() => setChatStreaming(false));
   };
 
   const handleClearHistory = async () => {
     if (!repoKey) return;
-    await clearRepoAskMessages(repoKey);
-    resetAskRepo();
+    await clearRepoChatMessages(repoKey);
+    resetChat();
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -137,21 +137,21 @@ export function AskRepoPage() {
         <span style={{ color: C.muted, fontSize: 11, flex: 1 }}>
           {pageContext.repoOwner}/{pageContext.repoName}
         </span>
-        {askRepoMessages.length > 0 && (
+        {chatMessages.length > 0 && (
           <button
             onClick={handleClearHistory}
-            disabled={askRepoStreaming}
-            title="Clear ask-repository history for this repository"
+            disabled={chatStreaming}
+            title="Clear chat history for this repository"
             style={{
               background: 'none',
               border: 'none',
               color: C.muted,
-              cursor: askRepoStreaming ? 'default' : 'pointer',
+              cursor: chatStreaming ? 'default' : 'pointer',
               padding: '3px 16px 3px 6px',
               borderRadius: 5,
               fontSize: 11,
               fontFamily: 'inherit',
-              opacity: askRepoStreaming ? 0.4 : 1,
+              opacity: chatStreaming ? 0.4 : 1,
             }}
           >
             Clear
@@ -160,9 +160,9 @@ export function AskRepoPage() {
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {askRepoMessages.length === 0 && (
+        {chatMessages.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginTop: 40, padding: '0 20px', gap: 8 }}>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.textSub }}>Ask about this repository&apos;s code.</p>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.textSub }}>Ask GitGuide about this repository&apos;s code.</p>
             <p style={{ margin: 0, fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
               Answers are grounded in the actual source and cite the files they came from — try &ldquo;where is authentication
               implemented?&rdquo; or &ldquo;trace the login flow&rdquo;.
@@ -170,7 +170,7 @@ export function AskRepoPage() {
           </div>
         )}
 
-        {askRepoMessages.map((msg, i) => (
+        {chatMessages.map((msg, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span
               style={{
@@ -197,7 +197,7 @@ export function AskRepoPage() {
               }}
             >
               {msg.content}
-              {msg.role === 'assistant' && askRepoStreaming && i === askRepoMessages.length - 1 && msg.content === '' && (
+              {msg.role === 'assistant' && chatStreaming && i === chatMessages.length - 1 && msg.content === '' && (
                 <span style={{ color: C.muted }}>Thinking…</span>
               )}
             </div>
@@ -253,13 +253,13 @@ export function AskRepoPage() {
       <div style={{ padding: '10px 14px', borderTop: `1px solid ${C.borderMuted}`, display: 'flex', gap: 8, alignItems: 'flex-end', flexShrink: 0, background: C.bg }}>
         <textarea
           ref={textareaRef}
-          value={askRepoInput}
-          onChange={(e) => setAskRepoInput(e.target.value)}
+          value={chatInput}
+          onChange={(e) => setChatInput(e.target.value)}
           onKeyDown={handleKeyDown}
           onKeyUp={(e) => e.stopPropagation()}
           placeholder="Ask about this repository's code…"
           rows={1}
-          disabled={askRepoStreaming}
+          disabled={chatStreaming}
           style={{
             flex: 1,
             background: C.bgTer,
@@ -290,16 +290,16 @@ export function AskRepoPage() {
         />
         <button
           onClick={handleSend}
-          disabled={!askRepoInput.trim() || askRepoStreaming}
+          disabled={!chatInput.trim() || chatStreaming}
           style={{
             width: 34,
             height: 34,
-            background: askRepoInput.trim() && !askRepoStreaming ? C.accent : C.bgTer,
-            color: askRepoInput.trim() && !askRepoStreaming ? C.bg : C.muted,
-            border: `1px solid ${askRepoInput.trim() && !askRepoStreaming ? C.accent : C.borderMuted}`,
+            background: chatInput.trim() && !chatStreaming ? C.accent : C.bgTer,
+            color: chatInput.trim() && !chatStreaming ? C.bg : C.muted,
+            border: `1px solid ${chatInput.trim() && !chatStreaming ? C.accent : C.borderMuted}`,
             borderRadius: '50%',
             fontSize: 14,
-            cursor: askRepoInput.trim() && !askRepoStreaming ? 'pointer' : 'default',
+            cursor: chatInput.trim() && !chatStreaming ? 'pointer' : 'default',
             fontFamily: 'inherit',
             flexShrink: 0,
             display: 'flex',
@@ -308,7 +308,7 @@ export function AskRepoPage() {
             transition: 'background 0.15s, border-color 0.15s',
           }}
         >
-          {askRepoStreaming ? (
+          {chatStreaming ? (
             <span style={{ fontSize: 11 }}>…</span>
           ) : (
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">

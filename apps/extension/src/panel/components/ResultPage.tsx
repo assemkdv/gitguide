@@ -56,7 +56,6 @@ export function ResultPage() {
     setView,
     setActiveAction,
     setOpen,
-    setChatContextNote,
     repoResult,
     repoLoading,
     repoError,
@@ -111,11 +110,6 @@ export function ResultPage() {
   }, [pageContext, activeAction, pendingIssueNumber, fileReady, issueTitleReady, fileResult, fileLoading, fileError, issueResult, issueLoading, issueError]);
 
   if (!pageContext || !activeAction) return null;
-
-  const handleContinueInChat = (text: string) => {
-    setChatContextNote(text);
-    setView('chat');
-  };
 
   const handleSelectIssue = (issue: GoodFirstIssueItem) => {
     setPendingIssueNumber(issue.number);
@@ -208,7 +202,7 @@ export function ResultPage() {
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       <BackButton onClick={goToQuickActions} />
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 16px 8px' }}>{renderBody()}</div>
-      {isDone && <ResultFooter getText={getFooterText} onContinueInChat={() => handleContinueInChat(getFooterText())} />}
+      {isDone && <ResultFooter getText={getFooterText} onContinueInChat={() => setView('chat')} />}
     </div>
   );
 }

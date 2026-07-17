@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { validateBody } from './validate';
-import { analyzeSchema, explainFileSchema, chatSchema } from './schemas';
+import { analyzeSchema, explainFileSchema, askRepoSchema } from './schemas';
 
 function mockReqRes(body: unknown) {
   const req = { body } as Request;
@@ -69,16 +69,16 @@ describe('validateBody', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('rejects a chat message over the configured length cap', () => {
-    const { req, res, next } = mockReqRes({ message: 'x'.repeat(4001), context: { repoOwner: 'o', repoName: 'r' } });
-    validateBody(chatSchema)(req, res, next);
+  it('rejects an ask-repo question over the configured length cap', () => {
+    const { req, res, next } = mockReqRes({ question: 'x'.repeat(2001), context: { repoOwner: 'o', repoName: 'r' } });
+    validateBody(askRepoSchema)(req, res, next);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('rejects chat history longer than the configured turn cap', () => {
-    const history = Array.from({ length: 21 }, (_, i) => ({ role: 'user' as const, content: `turn ${i}` }));
-    const { req, res, next } = mockReqRes({ message: 'hi', context: { repoOwner: 'o', repoName: 'r' }, history });
-    validateBody(chatSchema)(req, res, next);
+  it('rejects ask-repo history longer than the configured turn cap', () => {
+    const history = Array.from({ length: 13 }, (_, i) => ({ role: 'user' as const, content: `turn ${i}` }));
+    const { req, res, next } = mockReqRes({ question: 'hi', context: { repoOwner: 'o', repoName: 'r' }, history });
+    validateBody(askRepoSchema)(req, res, next);
     expect(next).not.toHaveBeenCalled();
   });
 });

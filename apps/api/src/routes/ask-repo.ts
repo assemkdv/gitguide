@@ -24,7 +24,7 @@ askRepoRouter.post('/', validateBody(askRepoSchema), async (req: Request, res: R
   res.flushHeaders();
 
   // Cancelled the moment the client disconnects (panel closed, user navigated away,
-  // or the extension's AskRepoPage disconnects its port on unmount) — mirrors every
+  // or the extension's AskGitGuidePage disconnects its port on unmount) — mirrors every
   // other streaming/multi-step route in this API.
   const controller = new AbortController();
   res.on('close', () => controller.abort());

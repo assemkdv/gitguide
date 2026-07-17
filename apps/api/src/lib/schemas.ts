@@ -30,27 +30,6 @@ export const analyzeSchema = repoIdentitySchema.extend({
 
 export const goodFirstIssuesSchema = repoIdentitySchema;
 
-export const chatSchema = z.object({
-  message: nonEmptyString.max(4000),
-  context: z.object({
-    repoOwner: repoSegment,
-    repoName: repoSegment,
-    issueNumber: z.number().int().positive().optional(),
-    issueTitle: z.string().max(500).optional(),
-    filePath: z.string().max(1000).optional(),
-    resultContext: z.string().max(20_000).optional(),
-  }),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string().max(4000),
-      }),
-    )
-    .max(20)
-    .optional(),
-});
-
 export const askRepoSchema = z.object({
   question: nonEmptyString.max(2000),
   context: z.object({

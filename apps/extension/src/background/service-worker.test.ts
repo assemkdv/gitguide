@@ -61,42 +61,12 @@ describe('service-worker SSE relay', () => {
     runtimeMock = installChromeRuntimeMock();
   });
 
-  it('registers two independent onConnect listeners (chat-stream and ask-repo-stream) additively', async () => {
+  it('registers a single onConnect listener for chat-stream', async () => {
     await import('./service-worker');
-    expect(runtimeMock.listenerCount()).toBe(2);
+    expect(runtimeMock.listenerCount()).toBe(1);
   });
 
-  it('relays chat-stream SSE events to the port, stopping at done — regression coverage for the pre-existing chat path', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        expect(url).toBe('http://localhost:3000/v1/chat');
-        return {
-          ok: true,
-          body: makeFakeBody([
-            'data: {"type":"chunk","content":"Hello"}\n\n',
-            'data: {"type":"chunk","content":" world"}\n\n',
-            'data: {"type":"done"}\n\n',
-          ]),
-        };
-      }),
-    );
-
-    await import('./service-worker');
-    const port = makePort('chat-stream');
-    runtimeMock.fireConnect(port);
-    port.send({ message: 'hi', context: { repoOwner: 'o', repoName: 'r' } });
-
-    await flush();
-
-    expect(port.messages).toEqual([
-      { type: 'chunk', content: 'Hello' },
-      { type: 'chunk', content: ' world' },
-      { type: 'done' },
-    ]);
-  });
-
-  it('relays ask-repo-stream events — citations and status before any answer chunk — in order', async () => {
+  it('relays chat-stream events — citations and status before any answer chunk — in order', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
@@ -114,7 +84,7 @@ describe('service-worker SSE relay', () => {
     );
 
     await import('./service-worker');
-    const port = makePort('ask-repo-stream');
+    const port = makePort('chat-stream');
     runtimeMock.fireConnect(port);
     port.send({ question: 'where is auth', context: { repoOwner: 'o', repoName: 'r' } });
 
@@ -124,7 +94,7 @@ describe('service-worker SSE relay', () => {
     expect(port.messages[0].citations[0].path).toBe('src/auth.ts');
   });
 
-  it('ignores a connection whose port name matches neither stream', async () => {
+  it('ignores a connection whose port name does not match', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
@@ -141,7 +111,7 @@ describe('service-worker SSE relay', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, body: null })));
 
     await import('./service-worker');
-    const port = makePort('ask-repo-stream');
+    const port = makePort('chat-stream');
     runtimeMock.fireConnect(port);
     port.send({ question: 'q', context: { repoOwner: 'o', repoName: 'r' } });
 

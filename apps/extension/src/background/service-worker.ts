@@ -7,10 +7,9 @@ interface StreamEvent {
 
 /**
  * Reads an SSE response body and relays each parsed `data: ` line back over `port`,
- * stopping after a 'done' or 'error' event. Shared by every streaming endpoint (chat,
- * ask-repo) so the manual SSE-parsing loop — content scripts can't use EventSource
+ * stopping after a 'done' or 'error' event — content scripts can't use EventSource
  * against a POST body, so this hand-rolled reader is what makes streaming possible at
- * all — exists in exactly one place instead of being copy-pasted per feature.
+ * all.
  */
 async function streamSse(port: chrome.runtime.Port, apiPath: string, body: unknown): Promise<void> {
   try {
@@ -65,13 +64,5 @@ async function streamSse(port: chrome.runtime.Port, apiPath: string, body: unkno
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'chat-stream') return;
-  port.onMessage.addListener((msg) => streamSse(port, '/v1/chat', msg));
-});
-
-// Registered as a second, independent listener (not by editing the branch above) so
-// this is purely additive — Chrome invokes every registered onConnect listener per
-// connection, so the existing chat-stream path is untouched by this addition.
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'ask-repo-stream') return;
   port.onMessage.addListener((msg) => streamSse(port, '/v1/ask-repo', msg));
 });

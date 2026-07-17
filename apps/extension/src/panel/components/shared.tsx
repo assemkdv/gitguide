@@ -184,7 +184,7 @@ export function ResultFooter({ getText, onContinueInChat }: { getText: () => str
             e.currentTarget.style.borderColor = SC.borderMuted;
           }}
         >
-          Continue in GitGuide Chat →
+          Ask about this →
         </button>
       </div>
     </div>

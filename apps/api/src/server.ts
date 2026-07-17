@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import { createRateLimit } from './lib/rate-limit';
 import { analyzeRouter } from './routes/analyze';
-import { chatRouter } from './routes/chat';
 import { explainRepoRouter } from './routes/explain-repo';
 import { explainFileRouter } from './routes/explain-file';
 import { goodFirstIssuesRouter } from './routes/good-first-issues';
@@ -58,7 +57,7 @@ app.use(
         // script actions: explain-repo/file, analyze, good-first-issues — content scripts
         // are CORS-restricted to the injected page's own origin since MV3, host_permissions
         // no longer exempts them) and chrome-extension://<id> (the background service
-        // worker, which relays /v1/chat and /v1/ask-repo and isn't subject to that
+        // worker, which relays /v1/ask-repo and isn't subject to that
         // restriction). Without logging which one showed up, a mismatch here is
         // undiagnosable from Render's logs alone, e.g. a stale/incorrect
         // ALLOWED_EXTENSION_IDS after the extension gets a new published id.
@@ -76,9 +75,6 @@ app.use(express.json({ limit: '256kb' }));
 // an allowed Origin header.
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 export const V1_RATE_LIMIT = 60;
-// /v1/chat streams tokens and is the cheapest to hammer relative to perceived value —
-// keep it under a tighter budget than the other one-shot endpoints.
-export const CHAT_RATE_LIMIT = 20;
 // /v1/ask-repo can trigger a full repository index build (not just one completion), so
 // it gets the tightest budget of all.
 export const ASK_REPO_RATE_LIMIT = 15;
@@ -86,7 +82,6 @@ export const ASK_REPO_RATE_LIMIT = 15;
 app.use('/v1', createRateLimit(RATE_LIMIT_WINDOW_MS, V1_RATE_LIMIT));
 
 app.use('/v1/analyze', analyzeRouter);
-app.use('/v1/chat', createRateLimit(RATE_LIMIT_WINDOW_MS, CHAT_RATE_LIMIT), chatRouter);
 app.use('/v1/explain-repo', explainRepoRouter);
 app.use('/v1/explain-file', explainFileRouter);
 app.use('/v1/good-first-issues', goodFirstIssuesRouter);

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type PanelView = 'home' | 'result' | 'chat' | 'ask-repo' | 'empty';
+export type PanelView = 'home' | 'result' | 'chat' | 'empty';
 export type PageKind = 'repo' | 'file' | 'issue';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 export type CardType = 'repo' | 'file' | 'issue' | 'good-first-issues';
@@ -104,11 +104,6 @@ export interface AnalysisResult {
   timeEstimate: string;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 export interface Citation {
   path: string;
   startLine: number;
@@ -116,7 +111,7 @@ export interface Citation {
   url: string;
 }
 
-export interface AskRepoMessage {
+export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
@@ -159,11 +154,6 @@ interface Store {
   chatMessages: ChatMessage[];
   chatInput: string;
   chatStreaming: boolean;
-  chatContextNote: string | null;
-
-  askRepoMessages: AskRepoMessage[];
-  askRepoInput: string;
-  askRepoStreaming: boolean;
 
   setOpen: (open: boolean) => void;
   setView: (view: PanelView) => void;
@@ -194,20 +184,12 @@ interface Store {
 
   addChatMessage: (msg: ChatMessage) => void;
   appendToLastChatMessage: (content: string) => void;
+  setLastChatMessageCitations: (citations: Citation[]) => void;
+  setLastChatMessageIndexingStatus: (status: 'partial' | 'complete') => void;
   setChatMessages: (messages: ChatMessage[]) => void;
   setChatInput: (input: string) => void;
   setChatStreaming: (streaming: boolean) => void;
-  setChatContextNote: (note: string | null) => void;
   resetChat: () => void;
-
-  addAskRepoMessage: (msg: AskRepoMessage) => void;
-  appendToLastAskRepoMessage: (content: string) => void;
-  setLastAskRepoMessageCitations: (citations: Citation[]) => void;
-  setLastAskRepoMessageIndexingStatus: (status: 'partial' | 'complete') => void;
-  setAskRepoMessages: (messages: AskRepoMessage[]) => void;
-  setAskRepoInput: (input: string) => void;
-  setAskRepoStreaming: (streaming: boolean) => void;
-  resetAskRepo: () => void;
 
   goToQuickActions: () => void;
 }
@@ -241,11 +223,6 @@ export const useStore = create<Store>((set) => ({
   chatMessages: [],
   chatInput: '',
   chatStreaming: false,
-  chatContextNote: null,
-
-  askRepoMessages: [],
-  askRepoInput: '',
-  askRepoStreaming: false,
 
   setOpen: (open) => set({ isOpen: open }),
   setView: (view) => set({ view }),
@@ -305,50 +282,31 @@ export const useStore = create<Store>((set) => ({
       return { chatMessages };
     }),
 
+  setLastChatMessageCitations: (citations) =>
+    set((s) => {
+      const chatMessages = [...s.chatMessages];
+      const last = chatMessages[chatMessages.length - 1];
+      if (last?.role === 'assistant') {
+        chatMessages[chatMessages.length - 1] = { ...last, citations };
+      }
+      return { chatMessages };
+    }),
+
+  setLastChatMessageIndexingStatus: (indexingStatus) =>
+    set((s) => {
+      const chatMessages = [...s.chatMessages];
+      const last = chatMessages[chatMessages.length - 1];
+      if (last?.role === 'assistant') {
+        chatMessages[chatMessages.length - 1] = { ...last, indexingStatus };
+      }
+      return { chatMessages };
+    }),
+
   setChatMessages: (chatMessages) => set({ chatMessages }),
   setChatInput: (chatInput) => set({ chatInput }),
   setChatStreaming: (chatStreaming) => set({ chatStreaming }),
-  setChatContextNote: (chatContextNote) => set({ chatContextNote }),
 
-  resetChat: () => set({ chatMessages: [], chatInput: '', chatStreaming: false, chatContextNote: null }),
-
-  addAskRepoMessage: (msg) => set((s) => ({ askRepoMessages: [...s.askRepoMessages, msg] })),
-
-  appendToLastAskRepoMessage: (content) =>
-    set((s) => {
-      const askRepoMessages = [...s.askRepoMessages];
-      const last = askRepoMessages[askRepoMessages.length - 1];
-      if (last?.role === 'assistant') {
-        askRepoMessages[askRepoMessages.length - 1] = { ...last, content: last.content + content };
-      }
-      return { askRepoMessages };
-    }),
-
-  setLastAskRepoMessageCitations: (citations) =>
-    set((s) => {
-      const askRepoMessages = [...s.askRepoMessages];
-      const last = askRepoMessages[askRepoMessages.length - 1];
-      if (last?.role === 'assistant') {
-        askRepoMessages[askRepoMessages.length - 1] = { ...last, citations };
-      }
-      return { askRepoMessages };
-    }),
-
-  setLastAskRepoMessageIndexingStatus: (indexingStatus) =>
-    set((s) => {
-      const askRepoMessages = [...s.askRepoMessages];
-      const last = askRepoMessages[askRepoMessages.length - 1];
-      if (last?.role === 'assistant') {
-        askRepoMessages[askRepoMessages.length - 1] = { ...last, indexingStatus };
-      }
-      return { askRepoMessages };
-    }),
-
-  setAskRepoMessages: (askRepoMessages) => set({ askRepoMessages }),
-  setAskRepoInput: (askRepoInput) => set({ askRepoInput }),
-  setAskRepoStreaming: (askRepoStreaming) => set({ askRepoStreaming }),
-
-  resetAskRepo: () => set({ askRepoMessages: [], askRepoInput: '', askRepoStreaming: false }),
+  resetChat: () => set({ chatMessages: [], chatInput: '', chatStreaming: false }),
 
   goToQuickActions: () => set({ view: 'home', activeAction: null }),
 }));

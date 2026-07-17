@@ -13,8 +13,7 @@ actually approachable means reading through code and comment threads by hand.
 - **Explain File**: what it does and how it fits into the project
 - **Summarize Issue**: what's being asked and how you'd approach it
 - **Find Good First Issue**: surfaces open `good first issue` / `help wanted` issues
-- **Chat**: follow-up questions grounded in whatever GitGuide already explained
-- **Ask Repository**: chat grounded in the repo's actual source code, with citations
+- **Ask GitGuide**: chat grounded in the repo's actual source code, with citations
   that link straight back to the file and line range on GitHub
 - **Caching**: re-open something you already explained and it's instant
 - **Streaming**: chat answers show up as they're generated
@@ -87,13 +86,12 @@ The backend validates every request with Zod, cancels in-flight GitHub/Groq call
 you navigate away mid-request, and degrades a malformed model response field by field
 instead of failing the whole request.
 
-## Ask Repository (RAG chat)
+## Ask GitGuide (RAG chat)
 
-Unlike Chat (grounded only in whatever GitGuide already generated — a repo/file/issue
-summary), Ask Repository answers questions from the repository's actual source. It's a
-small retrieval-augmented generation (RAG) pipeline, streamed over the same SSE
-mechanism as Chat, that runs entirely in the API — no data leaves the server except the
-question and the retrieved excerpts sent to Groq.
+Ask GitGuide answers questions from the repository's actual source, rather than a
+generic model response. It's a small retrieval-augmented generation (RAG) pipeline,
+streamed over SSE, that runs entirely in the API — no data leaves the server except
+the question and the retrieved excerpts sent to Groq.
 
 **Retrieval is hybrid.** Each indexed file is chunked (regex-based, preferring to cut at
 a function/class boundary over an arbitrary line) and embedded locally — no external
@@ -127,6 +125,10 @@ rebuild; a stale index is never served.
   from Hugging Face on first use and keeps it in memory for the process's lifetime. On
   Render's ephemeral filesystem, that means a fresh ~25MB download on every cold
   start/redeploy unless the cache is baked into the build image, which isn't set up yet.
+  Its native ONNX runtime also doesn't reliably fit Render's 512MB free instance, so
+  `ENABLE_LOCAL_EMBEDDINGS` (see `.env.example`) defaults to off there — retrieval runs
+  BM25 lexical search only, and the package is never imported. Set it to `true` on an
+  instance with enough memory for hybrid BM25 + semantic retrieval.
 - `/v1/ask-repo` is rate-limited tighter than the other routes (15 requests / 15 min per
   IP) since a cache miss can trigger a full repository index, not just one completion.
 - As with the rest of the API, `ALLOWED_EXTENSION_IDS` (see
@@ -136,7 +138,7 @@ rebuild; a stale index is never served.
 **Manually testing it:**
 1. `npm run dev:api`, load the extension pointed at it (see
    [Getting started](#getting-started)).
-2. Open a public GitHub repo, open the panel, click **Ask Repository**.
+2. Open a public GitHub repo, open the panel, click **Ask GitGuide**.
 3. Ask something concrete the code should answer, e.g. "where is authentication
    implemented?" — an answer should stream in with citation chips underneath; click one
    and confirm it opens the exact file and line range on GitHub.
@@ -146,7 +148,7 @@ rebuild; a stale index is never served.
    citations can now come from outside the initial priority set.
 5. Ask a follow-up question in the same session and confirm it uses conversation history
    (e.g. "what does that function call?").
-6. Switch to a different repo (or branch) mid-conversation and confirm Ask Repository's
+6. Switch to a different repo (or branch) mid-conversation and confirm Ask GitGuide's
    history resets rather than answering from the previous repo's index.
 
 ## Deployment
@@ -169,5 +171,5 @@ No CI/CD. Lint, tests, and builds run by hand for now.
 - Slash-branch detection has two fallbacks but isn't a guarantee
 - A totally broken model response still returns an error instead of degrading
 - Cancellation only happens when the connection drops, no explicit cancel signal
-- Ask Repository's index cache is in-memory and cold-starts on every deploy/restart —
-  see [Ask Repository](#ask-repository-rag-chat) for details
+- Ask GitGuide's index cache is in-memory and cold-starts on every deploy/restart —
+  see [Ask GitGuide](#ask-gitguide-rag-chat) for details

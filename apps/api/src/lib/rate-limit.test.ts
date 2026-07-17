@@ -18,7 +18,7 @@ describe('createRateLimit', () => {
     expect(blocked.status).toBe(429);
   });
 
-  it('keeps a separate counter per limiter instance, mirroring /v1 vs /v1/chat in server.ts', async () => {
+  it('keeps a separate counter per limiter instance, mirroring /v1 vs /v1/ask-repo in server.ts', async () => {
     const appA = express();
     appA.use(createRateLimit(60_000, 1));
     appA.get('/ping', (_req, res) => res.json({ ok: true }));

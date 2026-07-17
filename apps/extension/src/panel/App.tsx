@@ -3,8 +3,7 @@ import { useStore, repoKeyOf } from './store';
 import { EmptyState } from './components/EmptyState';
 import { HomeView } from './components/HomeView';
 import { ResultPage } from './components/ResultPage';
-import { ChatPage } from './components/ChatPage';
-import { AskRepoPage } from './components/AskRepoPage';
+import { AskGitGuidePage } from './components/AskGitGuidePage';
 import { parseGitHubPage } from '../content/page-parser';
 import { parseFileRouteFromUrl, startFileDetection, cancelFileDetection, isSameFileRoute } from './file-detection';
 import { devLog } from './dev-log';
@@ -508,8 +507,7 @@ export default function App() {
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {view === 'home' && <HomeView />}
           {view === 'result' && <ResultPage />}
-          {view === 'chat' && <ChatPage />}
-          {view === 'ask-repo' && <AskRepoPage />}
+          {view === 'chat' && <AskGitGuidePage />}
           {view === 'empty' && <EmptyState />}
         </div>
       </div>
