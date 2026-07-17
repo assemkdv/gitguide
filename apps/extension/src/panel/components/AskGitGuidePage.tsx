@@ -1,6 +1,7 @@
 import { useEffect, useRef, KeyboardEvent } from 'react';
 import { useStore, repoKeyOf, Citation } from '../store';
 import { loadRepoChatMessages, saveRepoChatMessages, clearRepoChatMessages } from '../storage';
+import { buildChatHistory } from '../chat-history';
 import { BackButton, SC as C } from './shared';
 
 interface ChatStreamEvent {
@@ -75,6 +76,10 @@ export function AskGitGuidePage() {
     const text = chatInput.trim();
     if (!text || chatStreaming || !pageContext || !repoKey) return;
 
+    // Captured from the messages as they stand *before* this turn's user question and
+    // empty assistant placeholder are appended below — those aren't prior history yet.
+    const history = buildChatHistory(useStore.getState().chatMessages);
+
     setChatInput('');
     addChatMessage({ role: 'user', content: text });
     saveRepoChatMessages(repoKey, useStore.getState().chatMessages);
@@ -91,6 +96,7 @@ export function AskGitGuidePage() {
         repoName: pageContext.repoName,
         ref: pageContext.page === 'file' ? pageContext.fileRef : undefined,
       },
+      history,
     });
 
     port.onMessage.addListener((msg: ChatStreamEvent) => {
@@ -291,6 +297,8 @@ export function AskGitGuidePage() {
         <button
           onClick={handleSend}
           disabled={!chatInput.trim() || chatStreaming}
+          aria-label="Send message"
+          title="Send message"
           style={{
             width: 34,
             height: 34,
