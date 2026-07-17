@@ -4,12 +4,12 @@ import request from 'supertest';
 vi.mock('../lib/github', () => ({ getRepoInfo: vi.fn() }));
 vi.mock('../lib/indexer', () => ({ ensureIndexed: vi.fn() }));
 vi.mock('../lib/groq-client', () => ({ getGroqClient: vi.fn() }));
-vi.mock('../lib/embeddings', () => ({ embedText: vi.fn() }));
+vi.mock('../lib/embeddings', () => ({ embedText: vi.fn(), embeddingsEnabled: vi.fn() }));
 
 import { getRepoInfo } from '../lib/github';
 import { ensureIndexed } from '../lib/indexer';
 import { getGroqClient } from '../lib/groq-client';
-import { embedText } from '../lib/embeddings';
+import { embedText, embeddingsEnabled } from '../lib/embeddings';
 import { BM25Index } from '../lib/bm25';
 import { app } from '../server';
 import type { ChunkRecord } from '../lib/vector-store';
@@ -65,6 +65,10 @@ function parseSseEvents(text: string): any[] {
 
 describe('POST /v1/ask-repo', () => {
   beforeEach(() => {
+    // This describe block predates ENABLE_LOCAL_EMBEDDINGS and tests the hybrid
+    // (embeddings-on) path throughout — see 'embeddings disabled (BM25-only)' below for
+    // the production-default path.
+    vi.mocked(embeddingsEnabled).mockReset().mockReturnValue(true);
     vi.mocked(getRepoInfo).mockReset().mockResolvedValue({ description: '', defaultBranch: 'main', language: null, topics: [] });
     vi.mocked(ensureIndexed).mockReset();
     mockGroq();
@@ -144,4 +148,54 @@ describe('POST /v1/ask-repo', () => {
       expect(events[1]).toEqual({ type: 'status', indexing: 'partial' });
     },
   );
+});
+
+describe('POST /v1/ask-repo with embeddings disabled (BM25-only, production default on Render)', () => {
+  beforeEach(() => {
+    vi.mocked(embeddingsEnabled).mockReset().mockReturnValue(false);
+    vi.mocked(embedText).mockReset();
+    vi.mocked(getRepoInfo).mockReset().mockResolvedValue({ description: '', defaultBranch: 'main', language: null, topics: [] });
+    vi.mocked(ensureIndexed).mockReset();
+    mockGroq();
+  });
+
+  it('never calls embedText, and still streams citations, status, answer chunks, and done via BM25 alone', async () => {
+    // Chunk text/query chosen to lexically overlap ("login") so BM25 actually retrieves
+    // it — proving the full pipeline (citations, indexing status, SSE answer stream)
+    // keeps working end to end without embeddings, not just that it fails to 503.
+    vi.mocked(ensureIndexed).mockResolvedValue(makeEntry({ chunks: [makeChunk({ embedding: null })] }));
+
+    const res = await request(app)
+      .post('/v1/ask-repo')
+      .set('Origin', 'https://github.com')
+      .send({ question: 'where is login handled', context: { repoOwner: 'owner', repoName: 'repo' } });
+
+    expect(embedText).not.toHaveBeenCalled();
+
+    const events = parseSseEvents(res.text);
+    expect(events[0].type).toBe('citations');
+    expect(events[0].citations).toEqual([
+      { path: 'src/auth.ts', startLine: 1, endLine: 10, url: 'https://github.com/owner/repo/blob/main/src/auth.ts#L1-L10' },
+    ]);
+    expect(events[1]).toEqual({ type: 'status', indexing: 'complete' });
+    const chunkEvents = events.filter((e) => e.type === 'chunk');
+    expect(chunkEvents.map((e) => e.content).join('')).toBe('Hello world');
+    expect(events[events.length - 1]).toEqual({ type: 'done' });
+  });
+
+  it('does not error or 503 just because embeddings are disabled, even when nothing matches lexically', async () => {
+    vi.mocked(ensureIndexed).mockResolvedValue(makeEntry({ chunks: [makeChunk({ embedding: null })] }));
+
+    const res = await request(app)
+      .post('/v1/ask-repo')
+      .set('Origin', 'https://github.com')
+      .send({ question: 'zzznomatchingtermzzz', context: { repoOwner: 'owner', repoName: 'repo' } });
+
+    expect(embedText).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+
+    const events = parseSseEvents(res.text);
+    expect(events[0]).toEqual({ type: 'citations', citations: [] }); // no lexical match — zero citations, not an error
+    expect(events[events.length - 1]).toEqual({ type: 'done' });
+  });
 });

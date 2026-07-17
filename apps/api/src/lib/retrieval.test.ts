@@ -124,4 +124,82 @@ describe('hybridRetrieve', () => {
     const results = hybridRetrieve(queryEmbedding, 'relevant', chunks, bm25, { k: 5, maxPerFile: 3 });
     expect(results).toHaveLength(5);
   });
+
+  describe('BM25-only mode (queryEmbedding: null — ENABLE_LOCAL_EMBEDDINGS not "true")', () => {
+    it('still retrieves purely from the lexical ranking, with no semantic contribution at all', () => {
+      // Best possible embedding match, but zero lexical overlap with the query — should
+      // NOT be retrieved when queryEmbedding is null, proving semantic ranking is fully
+      // skipped rather than merely down-weighted.
+      const semanticOnly = makeChunk({
+        id: 'semantic-only',
+        filePath: 'a.ts',
+        text: 'nothing relevant to the query lexically at all',
+        embedding: new Float32Array([1, 0]),
+      });
+      const lexicalMatch = makeChunk({
+        id: 'lexical-match',
+        filePath: 'b.ts',
+        text: 'identifierX identifierX identifierX',
+        embedding: new Float32Array([-1, 0]), // worst possible cosine — irrelevant here
+      });
+
+      const chunks = [semanticOnly, lexicalMatch];
+      const bm25 = buildBm25(chunks);
+
+      const results = hybridRetrieve(null, 'identifierX', chunks, bm25, { k: 10, maxPerFile: 10 });
+
+      expect(results.map((r) => r.chunk.id)).toEqual(['lexical-match']);
+    });
+
+    it('returns [] when the query has no lexical overlap with any chunk, rather than falling back to semantic order', () => {
+      const chunks = [makeChunk({ id: 'a', filePath: 'a.ts', text: 'completely unrelated content', embedding: new Float32Array([1, 0]) })];
+      const bm25 = buildBm25(chunks);
+
+      const results = hybridRetrieve(null, 'nomatchingtermhere', chunks, bm25);
+
+      expect(results).toEqual([]);
+    });
+
+    it('still applies the per-file diversity cap using BM25 order alone', () => {
+      const popularFileChunks = Array.from({ length: 6 }, (_, i) =>
+        makeChunk({
+          id: `popular-${i}`,
+          filePath: 'popular.ts',
+          startLine: i * 10 + 1,
+          endLine: i * 10 + 10,
+          text: 'matches the query term',
+          embedding: null,
+        }),
+      );
+      const bm25 = buildBm25(popularFileChunks);
+
+      const results = hybridRetrieve(null, 'matches query term', popularFileChunks, bm25, { k: 8, maxPerFile: 3 });
+
+      expect(results.length).toBeLessThanOrEqual(3);
+    });
+  });
+
+  it('skips chunks with a null embedding in the semantic ranking, without crashing, when queryEmbedding is provided', () => {
+    // A mixed corpus (e.g. some chunks indexed while embeddings were enabled, others
+    // while disabled) shouldn't crash cosineSimilarity — chunks lacking an embedding
+    // just don't get a semantic-ranking contribution, but can still surface via BM25.
+    const withEmbedding = makeChunk({
+      id: 'with-embedding',
+      filePath: 'a.ts',
+      text: 'unrelated to the query',
+      embedding: new Float32Array([1, 0]),
+    });
+    const withoutEmbedding = makeChunk({
+      id: 'without-embedding',
+      filePath: 'b.ts',
+      text: 'identifierX identifierX identifierX',
+      embedding: null,
+    });
+    const chunks = [withEmbedding, withoutEmbedding];
+    const bm25 = buildBm25(chunks);
+
+    const results = hybridRetrieve(new Float32Array([1, 0]), 'identifierX', chunks, bm25, { k: 10, maxPerFile: 10 });
+
+    expect(results.map((r) => r.chunk.id)).toContain('without-embedding');
+  });
 });

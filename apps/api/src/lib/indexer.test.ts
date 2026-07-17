@@ -9,11 +9,12 @@ vi.mock('./repo-summary', () => ({
 }));
 vi.mock('./embeddings', () => ({
   embedTexts: vi.fn(),
+  embeddingsEnabled: vi.fn(),
 }));
 
 import { getBranchHeadSha, getFileContent } from './github';
 import { generateRepoSummary } from './repo-summary';
-import { embedTexts } from './embeddings';
+import { embedTexts, embeddingsEnabled } from './embeddings';
 import { createIndexer, selectPriorityFiles } from './indexer';
 
 function deferred<T>() {
@@ -70,6 +71,10 @@ describe('selectPriorityFiles', () => {
 
 describe('createIndexer — lazy/progressive indexing', () => {
   beforeEach(() => {
+    // This describe block predates ENABLE_LOCAL_EMBEDDINGS and tests the hybrid
+    // (embeddings-on) path throughout — see 'embeddings disabled (BM25-only)' below for
+    // the production-default path.
+    vi.mocked(embeddingsEnabled).mockReset().mockReturnValue(true);
     vi.mocked(getBranchHeadSha).mockReset();
     vi.mocked(getFileContent).mockReset();
     vi.mocked(generateRepoSummary).mockReset();
@@ -176,5 +181,69 @@ describe('createIndexer — lazy/progressive indexing', () => {
     const entry = await indexer.ensureIndexed('owner', 'repo', 'main', 'q', undefined);
 
     expect(entry.chunks.map((c) => c.filePath)).toEqual(['docs/guide.md']);
+  });
+});
+
+describe('createIndexer — embeddings disabled (BM25-only, production default on Render)', () => {
+  beforeEach(() => {
+    vi.mocked(embeddingsEnabled).mockReset().mockReturnValue(false);
+    vi.mocked(getBranchHeadSha).mockReset();
+    vi.mocked(getFileContent).mockReset();
+    vi.mocked(generateRepoSummary).mockReset();
+    vi.mocked(embedTexts).mockReset();
+  });
+
+  it('never calls embedTexts, and every chunk still gets a full record with embedding: null', async () => {
+    vi.mocked(getBranchHeadSha).mockResolvedValue('sha1');
+    vi.mocked(generateRepoSummary).mockResolvedValue({
+      repoInfo: { description: '', defaultBranch: 'main', language: null, topics: [] },
+      ref: 'main',
+      tree: ['README.md'],
+      summary: SUMMARY,
+    });
+    vi.mocked(getFileContent).mockResolvedValue(FILE_CONTENT);
+
+    const indexer = createIndexer();
+    const entry = await indexer.ensureIndexed('owner', 'repo', 'main', 'q', undefined);
+
+    expect(entry.chunks.length).toBeGreaterThan(0);
+    expect(entry.chunks.every((c) => c.embedding === null)).toBe(true);
+    expect(embedTexts).not.toHaveBeenCalled();
+  });
+
+  it('still builds a usable BM25 index over the un-embedded chunks', async () => {
+    vi.mocked(getBranchHeadSha).mockResolvedValue('sha1');
+    vi.mocked(generateRepoSummary).mockResolvedValue({
+      repoInfo: { description: '', defaultBranch: 'main', language: null, topics: [] },
+      ref: 'main',
+      tree: ['README.md'],
+      summary: SUMMARY,
+    });
+    vi.mocked(getFileContent).mockResolvedValue(FILE_CONTENT);
+
+    const indexer = createIndexer();
+    const entry = await indexer.ensureIndexed('owner', 'repo', 'main', 'helper', undefined);
+
+    expect(entry.bm25.score('helper').length).toBeGreaterThan(0);
+    expect(embedTexts).not.toHaveBeenCalled();
+  });
+
+  it('never calls embedTexts across background (Phase B) indexing either', async () => {
+    vi.mocked(getBranchHeadSha).mockResolvedValue('sha1');
+    vi.mocked(generateRepoSummary).mockResolvedValue({
+      repoInfo: { description: '', defaultBranch: 'main', language: null, topics: [] },
+      ref: 'main',
+      tree: ['README.md', 'src/foo.ts', 'src/bar.ts'],
+      summary: SUMMARY,
+    });
+    vi.mocked(getFileContent).mockResolvedValue(FILE_CONTENT);
+
+    const indexer = createIndexer();
+    const entry = await indexer.ensureIndexed('owner', 'repo', 'main', 'no keyword overlap', undefined);
+    await waitUntil(() => entry.status === 'complete');
+
+    expect(entry.chunks.length).toBeGreaterThan(1);
+    expect(entry.chunks.every((c) => c.embedding === null)).toBe(true);
+    expect(embedTexts).not.toHaveBeenCalled();
   });
 });

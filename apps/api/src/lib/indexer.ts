@@ -10,7 +10,7 @@ import { isIndexableFile } from './ignore-list';
 import { generateRepoSummary, RepoSummaryFields } from './repo-summary';
 import { chunkFile, Chunk } from './chunking';
 import { tokenize, BM25Index } from './bm25';
-import { embedTexts } from './embeddings';
+import { embedTexts, embeddingsEnabled } from './embeddings';
 import { VectorStore, InMemoryVectorStore, ChunkRecord } from './vector-store';
 
 export const MAX_INDEXED_FILES = 200;
@@ -104,6 +104,21 @@ async function fetchFilesBounded(
   return results;
 }
 
+function toChunkRecord(chunk: Chunk, owner: string, repoName: string, sha: string, embedding: Float32Array | null): ChunkRecord {
+  return {
+    id: `${chunk.filePath}:${chunk.startLine}-${chunk.endLine}`,
+    repoOwner: owner,
+    repoName,
+    sha,
+    filePath: chunk.filePath,
+    language: chunk.language,
+    startLine: chunk.startLine,
+    endLine: chunk.endLine,
+    text: chunk.text,
+    embedding,
+  };
+}
+
 async function embedChunks(
   chunks: Chunk[],
   owner: string,
@@ -111,6 +126,14 @@ async function embedChunks(
   sha: string,
   signal?: AbortSignal,
 ): Promise<ChunkRecord[]> {
+  if (!embeddingsEnabled()) {
+    // BM25-only mode: skip vector generation entirely, never calling embedTexts (and
+    // therefore never importing/initializing @huggingface/transformers — see
+    // embeddings.ts). Chunks still become full ChunkRecords, just with embedding: null;
+    // retrieval.ts's semantic ranking skips those, falling back to BM25 alone.
+    return chunks.map((chunk) => toChunkRecord(chunk, owner, repoName, sha, null));
+  }
+
   const records: ChunkRecord[] = [];
   for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
     if (signal?.aborted) break;
@@ -118,20 +141,8 @@ async function embedChunks(
     const embeddings = await embedTexts(batch.map((chunk) => chunk.text));
     for (let j = 0; j < batch.length; j++) {
       const embedding = embeddings[j];
-      if (!embedding) continue; // defensive — should always match batch length 1:1
-      const chunk = batch[j];
-      records.push({
-        id: `${chunk.filePath}:${chunk.startLine}-${chunk.endLine}`,
-        repoOwner: owner,
-        repoName,
-        sha,
-        filePath: chunk.filePath,
-        language: chunk.language,
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        text: chunk.text,
-        embedding,
-      });
+      if (!embedding) continue; // defensive — should always match batch length 1:1 when enabled
+      records.push(toChunkRecord(batch[j], owner, repoName, sha, embedding));
     }
   }
   return records;

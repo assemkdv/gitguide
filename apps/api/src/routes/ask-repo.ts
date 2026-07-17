@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getRepoInfo } from '../lib/github';
 import { getGroqClient } from '../lib/groq-client';
-import { embedText } from '../lib/embeddings';
+import { embedText, embeddingsEnabled } from '../lib/embeddings';
 import { validateBody } from '../lib/validate';
 import { askRepoSchema } from '../lib/schemas';
 import { ensureIndexed } from '../lib/indexer';
@@ -48,7 +48,10 @@ askRepoRouter.post('/', validateBody(askRepoSchema), async (req: Request, res: R
       return;
     }
 
-    const queryEmbedding = await embedText(question);
+    // BM25-only when embeddings are disabled (ENABLE_LOCAL_EMBEDDINGS !== 'true') — never
+    // call embedText at all, not just discard its result, so @huggingface/transformers is
+    // never invoked. hybridRetrieve treats a null queryEmbedding as "lexical-only".
+    const queryEmbedding = embeddingsEnabled() ? await embedText(question) : null;
     if (signal.aborted) return;
 
     const results = hybridRetrieve(queryEmbedding, question, entry.chunks, entry.bm25);

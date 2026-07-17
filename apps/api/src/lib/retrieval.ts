@@ -20,13 +20,20 @@ export const MAX_PER_FILE = 3;
 
 function rankByCosine(queryEmbedding: Float32Array, chunks: ChunkRecord[]): string[] {
   return chunks
+    // Chunks indexed while embeddings were disabled have embedding: null — they simply
+    // don't participate in the semantic ranking (BM25 alone still surfaces them).
+    .filter((chunk): chunk is ChunkRecord & { embedding: Float32Array } => chunk.embedding !== null)
     .map((chunk) => ({ id: chunk.id, similarity: cosineSimilarity(queryEmbedding, chunk.embedding) }))
     .sort((a, b) => b.similarity - a.similarity)
     .map((entry) => entry.id);
 }
 
 export function hybridRetrieve(
-  queryEmbedding: Float32Array,
+  // null when ENABLE_LOCAL_EMBEDDINGS isn't 'true' (see embeddings.ts) — retrieval then
+  // runs BM25 only, skipping the semantic ranking/RRF-fusion step entirely rather than
+  // treating an absent embedding as a zero vector, which would inject a meaningless,
+  // arbitrarily-ordered rank contribution for every chunk.
+  queryEmbedding: Float32Array | null,
   query: string,
   chunks: ChunkRecord[],
   bm25: BM25Index,
@@ -36,7 +43,6 @@ export function hybridRetrieve(
   const k = options.k ?? TOP_K;
   const maxPerFile = options.maxPerFile ?? MAX_PER_FILE;
 
-  const semanticRanking = rankByCosine(queryEmbedding, chunks);
   const lexicalRanking = bm25.score(query).map((match) => match.id);
 
   const rrfScores = new Map<string, number>();
@@ -45,8 +51,10 @@ export function hybridRetrieve(
       rrfScores.set(id, (rrfScores.get(id) ?? 0) + 1 / (RRF_K + rank + 1));
     });
   };
-  addRankContributions(semanticRanking);
   addRankContributions(lexicalRanking);
+  if (queryEmbedding) {
+    addRankContributions(rankByCosine(queryEmbedding, chunks));
+  }
 
   const chunksById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
   const fused = Array.from(rrfScores.entries())

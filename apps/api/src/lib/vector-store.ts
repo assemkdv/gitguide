@@ -14,7 +14,9 @@ export interface ChunkRecord {
   startLine: number;
   endLine: number;
   text: string;
-  embedding: Float32Array;
+  // null when indexed while ENABLE_LOCAL_EMBEDDINGS wasn't 'true' — retrieval.ts skips
+  // this chunk in the semantic ranking rather than treating it as a real embedding.
+  embedding: Float32Array | null;
 }
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
