@@ -37,6 +37,8 @@ export async function runExplainRepo(ctx: PageContext): Promise<void> {
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
+    const current = useStore.getState().pageContext;
+    if (!current || repoKeyOf(current.repoOwner, current.repoName) !== repoKey) return;
     setRepoResult(data);
     await saveRepoCache(repoKey, data);
   } catch {
@@ -106,6 +108,16 @@ export async function runExplainFile(ctx: PageContext): Promise<void> {
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
+    const current = useStore.getState().pageContext;
+    if (
+      !current ||
+      current.page !== 'file' ||
+      repoKeyOf(current.repoOwner, current.repoName) !== repoKey ||
+      current.filePath !== ctx.filePath ||
+      (current.fileRef ?? 'HEAD') !== fileRef
+    ) {
+      return;
+    }
     setFileResult(data);
     setFileQuickResult(null);
     setFileStage('complete');
@@ -153,6 +165,15 @@ export async function runSummarizeIssue(ctx: PageContext): Promise<void> {
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
+    const current = useStore.getState().pageContext;
+    if (
+      !current ||
+      current.page !== 'issue' ||
+      repoKeyOf(current.repoOwner, current.repoName) !== repoKey ||
+      current.issueNumber !== ctx.issueNumber
+    ) {
+      return;
+    }
     setIssueResult(data);
     await saveIssueCache(repoKey, ctx.issueNumber, data);
   } catch {
@@ -186,6 +207,8 @@ export async function runGoodFirstIssues(ctx: PageContext): Promise<void> {
     });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
+    const current = useStore.getState().pageContext;
+    if (!current || repoKeyOf(current.repoOwner, current.repoName) !== repoKey) return;
     setGoodFirstIssuesResult(data.goodFirstIssues);
     await saveGoodFirstIssuesCache(repoKey, data.goodFirstIssues);
   } catch {

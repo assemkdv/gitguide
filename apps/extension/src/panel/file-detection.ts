@@ -1,4 +1,5 @@
-import { useStore } from './store';
+import { useStore, repoKeyOf } from './store';
+import type { PageContext } from './store';
 import {
   parseFileRouteFromUrl,
   extractFileContentFromDom,
@@ -13,6 +14,19 @@ import { devLog } from './dev-log';
 
 export type { FileRouteInfo };
 export { parseFileRouteFromUrl };
+
+/** True when `route` is the same file page as `prev` (same repo, path, and ref) — the
+ * navigation is a no-op and any in-flight detection/content for it should be left alone
+ * rather than restarted. Ref must match too: a file at the same path on a different
+ * branch/tag is a different file, not a re-render of the current one. */
+export function isSameFileRoute(prev: PageContext | null, route: FileRouteInfo): boolean {
+  return (
+    prev?.page === 'file' &&
+    repoKeyOf(prev.repoOwner, prev.repoName) === repoKeyOf(route.repoOwner, route.repoName) &&
+    prev.filePath === route.filePath &&
+    prev.fileRef === route.ref
+  );
+}
 
 const HARD_TIMEOUT_MS = 3000;
 

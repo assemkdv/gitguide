@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useStore } from './store';
 import { fetchRawFileContent } from '../content/fetch-file';
-import { startFileDetection, cancelFileDetection } from './file-detection';
+import { startFileDetection, cancelFileDetection, isSameFileRoute } from './file-detection';
 import type { FileRouteInfo } from '../content/page-parser';
 
 vi.mock('../content/fetch-file', () => ({
@@ -74,5 +74,38 @@ describe('file-detection stale-navigation cancellation', () => {
 
     // Still a repo page — the cancelled file detection must not have turned it back into a file page.
     expect(useStore.getState().pageContext?.page).toBe('repo');
+  });
+});
+
+describe('isSameFileRoute', () => {
+  it('is true for the identical repo/path/ref', () => {
+    const prev = { repoOwner: 'owner', repoName: 'repo', page: 'file' as const, filePath: 'src/auth.ts', fileRef: 'main' };
+    expect(isSameFileRoute(prev, routeFor('src/auth.ts'))).toBe(true);
+  });
+
+  it('is false when the ref (branch) differs, even with the same repo and path', () => {
+    // Regression: navigating from main/src/auth.ts to feature/new-auth/src/auth.ts
+    // must not be treated as a no-op, or the previous branch's content/explanation
+    // would keep showing under the new branch.
+    const prev = { repoOwner: 'owner', repoName: 'repo', page: 'file' as const, filePath: 'src/auth.ts', fileRef: 'main' };
+    const nextRoute: FileRouteInfo = { repoOwner: 'owner', repoName: 'repo', ref: 'feature/new-auth', filePath: 'src/auth.ts' };
+    expect(isSameFileRoute(prev, nextRoute)).toBe(false);
+  });
+
+  it('is false when the file path differs', () => {
+    const prev = { repoOwner: 'owner', repoName: 'repo', page: 'file' as const, filePath: 'src/auth.ts', fileRef: 'main' };
+    expect(isSameFileRoute(prev, routeFor('src/other.ts'))).toBe(false);
+  });
+
+  it('is false when the repository differs', () => {
+    const prev = { repoOwner: 'owner', repoName: 'repo', page: 'file' as const, filePath: 'src/auth.ts', fileRef: 'main' };
+    const nextRoute: FileRouteInfo = { repoOwner: 'other-owner', repoName: 'repo', ref: 'main', filePath: 'src/auth.ts' };
+    expect(isSameFileRoute(prev, nextRoute)).toBe(false);
+  });
+
+  it('is false when there was no previous file page', () => {
+    expect(isSameFileRoute(null, routeFor('src/auth.ts'))).toBe(false);
+    const prevRepo = { repoOwner: 'owner', repoName: 'repo', page: 'repo' as const };
+    expect(isSameFileRoute(prevRepo, routeFor('src/auth.ts'))).toBe(false);
   });
 });

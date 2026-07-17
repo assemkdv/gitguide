@@ -5,7 +5,7 @@ import { HomeView } from './components/HomeView';
 import { ResultPage } from './components/ResultPage';
 import { ChatPage } from './components/ChatPage';
 import { parseGitHubPage } from '../content/page-parser';
-import { parseFileRouteFromUrl, startFileDetection, cancelFileDetection } from './file-detection';
+import { parseFileRouteFromUrl, startFileDetection, cancelFileDetection, isSameFileRoute } from './file-detection';
 import { devLog } from './dev-log';
 import { pruneExpiredCache } from './storage';
 
@@ -148,8 +148,7 @@ export default function App() {
 
     const prevRepoKey = prev ? repoKeyOf(prev.repoOwner, prev.repoName) : null;
     const nextRepoKey = repoKeyOf(fileRoute.repoOwner, fileRoute.repoName);
-    const unchanged = prev?.page === 'file' && prevRepoKey === nextRepoKey && prev.filePath === fileRoute.filePath;
-    if (unchanged) return; // Same file as before — don't restart detection or clobber in-flight content.
+    if (isSameFileRoute(prev, fileRoute)) return; // Same file as before — don't restart detection or clobber in-flight content.
 
     devLog(`file route parsed at ${Math.round(performance.now() - navStart)}ms`);
 
