@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { validateBody } from './validate';
-import { analyzeSchema, explainFileSchema } from './schemas';
+import { analyzeSchema, explainFileSchema, chatSchema } from './schemas';
 
 function mockReqRes(body: unknown) {
   const req = { body } as Request;
@@ -49,6 +49,36 @@ describe('validateBody', () => {
   it('rejects an empty string for a required non-empty field', () => {
     const { req, res, next } = mockReqRes({ repoOwner: '', repoName: 'repo' });
     validateBody(explainFileSchema)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects fileContent over the configured size cap', () => {
+    const { req, res, next } = mockReqRes({
+      repoOwner: 'o',
+      repoName: 'r',
+      filePath: 'a.ts',
+      fileContent: 'x'.repeat(200_001),
+    });
+    validateBody(explainFileSchema)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects an issue title over the configured length cap', () => {
+    const { req, res, next } = mockReqRes({ repoOwner: 'o', repoName: 'r', issueNumber: 1, issueTitle: 'x'.repeat(501) });
+    validateBody(analyzeSchema)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects a chat message over the configured length cap', () => {
+    const { req, res, next } = mockReqRes({ message: 'x'.repeat(4001), context: { repoOwner: 'o', repoName: 'r' } });
+    validateBody(chatSchema)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('rejects chat history longer than the configured turn cap', () => {
+    const history = Array.from({ length: 21 }, (_, i) => ({ role: 'user' as const, content: `turn ${i}` }));
+    const { req, res, next } = mockReqRes({ message: 'hi', context: { repoOwner: 'o', repoName: 'r' }, history });
+    validateBody(chatSchema)(req, res, next);
     expect(next).not.toHaveBeenCalled();
   });
 });
