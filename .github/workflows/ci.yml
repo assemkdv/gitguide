@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # README documents "Node 18+" as the minimum this project needs; no .nvmrc or
+          # engines field exists to read from, so this is the single source of truth.
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # apps/api's own "build" script is `tsc` (no separate noEmit typecheck script
+      # exists) — for this workspace that one command both typechecks and produces the
+      # production build, so it stands in for both, rather than running tsc twice.
+      - name: Build & typecheck API
+        run: npm run build --workspace=apps/api
+
+      # apps/extension's "build" script is `vite build`, which transpiles per-file via
+      # esbuild and does not type-check across the project — this is the only step that
+      # actually catches a type error there, so it has to run as its own step rather
+      # than being folded into the build below.
+      - name: Typecheck extension
+        run: npx tsc --noEmit -p apps/extension
+
+      - name: Test
+        run: npm test
+
+      - name: Build extension
+        run: npm run build:extension
