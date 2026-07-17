@@ -10,6 +10,15 @@ import { askRepoRouter } from './routes/ask-repo';
 
 export const app = express();
 
+// Render sits its own reverse proxy in front of this app, which sets X-Forwarded-For.
+// express-rate-limit reads req.ip to key its per-IP counters, and refuses to trust that
+// header at all unless Express is told how many proxy hops to trust — without this it
+// throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request. Render adds exactly one
+// hop, so trust exactly one (not `true`/trust-all, which would let a client spoof its
+// own X-Forwarded-For and bypass the per-IP limit). Must be set before any rate limiter
+// middleware below is registered, since that's the first thing that reads req.ip.
+app.set('trust proxy', 1);
+
 // Health checks (Render, uptime monitors) hit this directly and generally don't send
 // an Origin header — keep it exempt from the CORS/origin gate below entirely.
 app.get('/health', (_req, res) => {

@@ -34,6 +34,18 @@ describe('CORS origin gate', () => {
   });
 });
 
+describe('trust proxy (Render reverse proxy)', () => {
+  it("sets exactly one trusted hop, so req.ip resolves to Render's forwarded client IP rather than the proxy's own address", () => {
+    // express-rate-limit's per-IP counters (and any future IP-based logic) key off
+    // req.ip, which Express only derives from X-Forwarded-For for as many hops as
+    // 'trust proxy' allows. `1` matches Render's single reverse-proxy hop; `true` would
+    // trust every hop a client could forge, letting anyone bypass the per-IP limit.
+    // See rate-limit.test.ts for why this setting is what stops
+    // ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+    expect(app.get('trust proxy')).toBe(1);
+  });
+});
+
 describe('CORS origin gate with ALLOWED_EXTENSION_IDS configured', () => {
   const original = process.env.ALLOWED_EXTENSION_IDS;
 
