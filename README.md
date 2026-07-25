@@ -183,10 +183,4 @@ green CI run before merging is the actual safeguard; Render doesn't enforce it.
 
 ## Known limitations
 
-- No end-to-end tests, just unit tests on the pure logic
 - Private repos aren't fully supported (no auth path for file content)
-- Slash-branch detection has two fallbacks but isn't a guarantee
-- A totally broken model response still returns an error instead of degrading
-- Cancellation only happens when the connection drops, no explicit cancel signal
-- Ask GitGuide's index cache is in-memory and cold-starts on every deploy/restart;
-  see [Ask GitGuide](#ask-gitguide-rag-chat) for details
