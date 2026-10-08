@@ -1,128 +1,171 @@
 import { Router, Request, Response } from 'express';
-import Groq from 'groq-sdk';
-import { parseJsonCompletion, GroqResponseError } from '../lib/groq-json';
+import { parseJsonCompletion } from '../lib/groq-json';
 import { validateBody } from '../lib/validate';
 import { explainFileSchema } from '../lib/schemas';
 import { explainFileOutputSchema, explainFileQuickOutputSchema } from '../lib/output-schemas';
+import { getFileAtCommit, getTree, resolveSnapshot, RepoSnapshot } from '../lib/github';
+import { getGroqClient } from '../lib/groq-client';
+import { withAiSlot } from '../lib/ai-guard';
+import { getConfig } from '../lib/config';
+import { modelOptions } from '../lib/ai-models';
+import { sendError } from '../lib/errors';
+import { checkPaths, blobUrl } from '../lib/path-evidence';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
+import { requestSignal } from '../lib/request-signal';
 import type { z } from 'zod';
 
 export const explainFileRouter = Router();
 
 type ExplainFileBody = z.infer<typeof explainFileSchema>;
 
-explainFileRouter.post('/', validateBody(explainFileSchema), async (req: Request, res: Response) => {
-  const { repoOwner, repoName, filePath, fileContent } = req.body as ExplainFileBody;
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+export const FULL_ANALYSIS_CHARS = 6000;
+export const QUICK_ANALYSIS_CHARS = 2500;
+const FILE_DOWNLOAD_MAX_BYTES = 200_000;
 
-  const controller = new AbortController();
-  res.on('close', () => controller.abort());
-  const { signal } = controller;
-
-  const prompt = `You are a senior software engineer giving a new contributor a thorough orientation to a single file.
-
-Repository: ${repoOwner}/${repoName}
-File: ${filePath}
-
-Contents (may be truncated):
-${(fileContent || '').slice(0, 6000)}
-
-Respond with ONLY valid JSON. No markdown, no code blocks, no extra text.
-
-{
-  "purpose": "1 sentence: what this file is responsible for and why it exists",
-  "summary": "2-3 sentence plain-English walkthrough of what the file does, written for someone who hasn't opened it yet",
-  "mainComponents": ["function/class/export one — what it does", "function/class/export two — what it does"],
-  "inputsOutputs": "1-2 sentences: what this file/module takes as input (props, args, request data) and what it produces/returns/renders",
-  "dependencies": ["notable import or dependency one", "notable import or dependency two"],
-  "usedBy": "1 sentence on what else in the project likely imports or calls into this file, based on its exports and role",
-  "connections": "1-2 sentences on how this file connects to the rest of the project — what larger flow it's part of",
-  "importantLogic": "1-2 sentences on the trickiest or most important piece of logic in this file",
-  "edgeCases": "1-2 sentences on edge cases or failure modes this file has to handle, or empty string if none are evident",
-  "contributorNotes": "1-2 sentences on what a contributor should understand before changing this file — gotchas, conventions, invariants",
-  "relatedFiles": ["path or name of a related file worth exploring next, if inferable from imports/context"]
+export interface FileAnalysisMeta {
+  ref: string;
+  commitSha: string;
+  path: string;
+  url: string;
+  lines: number;
+  totalChars: number;
+  analyzedChars: number;
+  /** The model saw only the beginning of the file. */
+  truncated: boolean;
 }
 
-RULES:
-- mainComponents: 3-5 items, each naming an actual function/class/export/hook from the file content above, under 15 words.
-- dependencies: 2-5 items, real imports/packages/modules referenced in the file. If the file has none, return an empty array.
-- relatedFiles: 0-4 items. Only include files you can reasonably infer (e.g. from relative imports or clear naming conventions). Empty array if you can't infer any.
-- Be specific and concrete throughout. No filler like "this file contains code that..." or "it is well structured".
-- If the content is truncated or unclear, still give your best concrete read rather than hedging.`;
+async function loadFile(body: ExplainFileBody, analysisChars: number, signal: AbortSignal) {
+  const snapshot = await resolveSnapshot(body.repoOwner, body.repoName, body.ref, signal);
+  const file = await getFileAtCommit(snapshot.owner, snapshot.repo, snapshot.commitSha, body.filePath, {
+    signal,
+    maxBytes: FILE_DOWNLOAD_MAX_BYTES,
+  });
+  const excerpt = file.content.slice(0, analysisChars);
+  const meta: FileAnalysisMeta = {
+    ref: snapshot.ref,
+    commitSha: snapshot.commitSha,
+    path: body.filePath,
+    url: blobUrl(snapshot.owner, snapshot.repo, snapshot.commitSha, body.filePath),
+    lines: file.content.split('\n').length,
+    totalChars: file.content.length,
+    analyzedChars: excerpt.length,
+    truncated: file.truncated || excerpt.length < file.content.length,
+  };
+  return { snapshot, excerpt, meta, fileDownloadTruncated: file.truncated };
+}
+
+function fileHeader(snapshot: RepoSnapshot, meta: FileAnalysisMeta): string {
+  return `Repository: ${snapshot.owner}/${snapshot.repo} (ref ${snapshot.ref}, commit ${snapshot.commitSha.slice(0, 7)})
+File: ${meta.path}
+${meta.truncated ? `NOTE: only the first ${meta.analyzedChars} characters of this file are shown; the rest was not analyzed. Do not describe code you cannot see.` : 'The complete file is shown.'}`;
+}
+
+explainFileRouter.post('/', validateBody(explainFileSchema), async (req: Request, res: Response) => {
+  const body = req.body as ExplainFileBody;
+  const signal = requestSignal(req, res);
 
   try {
-    const completion = await groq.chat.completions.create(
-      {
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        max_tokens: 1400,
-      },
-      { signal },
-    );
-    if (signal.aborted) return;
+    const { snapshot, excerpt, meta } = await loadFile(body, FULL_ANALYSIS_CHARS, signal);
 
-    const raw = completion.choices[0]?.message?.content ?? '';
-    res.json(parseJsonCompletion(raw, explainFileOutputSchema));
+    const system = `You are a senior software engineer explaining a single file to a new contributor.
+
+${OUTPUT_STYLE_RULES}
+
+${UNTRUSTED_DATA_RULES}
+- Clearly separate what the file itself shows from inference: when you infer something not visible in the file (for example who calls it), say "likely" or "probably".
+
+Respond with ONLY valid JSON. No markdown, no code fences, no extra text.`;
+
+    const user = `${fileHeader(snapshot, meta)}
+
+${untrusted('file_content', excerpt)}
+
+Return this JSON shape:
+{
+  "purpose": "1 sentence: what this file is responsible for",
+  "summary": "2-3 sentence plain-English walkthrough of what the file does",
+  "mainComponents": ["function/class/export name: what it does"],
+  "inputsOutputs": "1-2 sentences on inputs and outputs, or empty string if not applicable",
+  "dependencies": ["import or package actually referenced in the file"],
+  "usedBy": "1 sentence on what likely uses this file (this is inference, so say so), or empty string",
+  "connections": "1-2 sentences on how it fits into the project, or empty string if the file doesn't show it",
+  "importantLogic": "1-2 sentences on the most important logic, or empty string for trivial files",
+  "edgeCases": "1-2 sentences on edge cases visible in the code, or empty string if none are evident",
+  "contributorNotes": "1-2 sentences a contributor should know before changing this file",
+  "relatedFiles": ["path of a related file referenced by an import or path in the code"]
+}
+
+Rules:
+- mainComponents: up to 5 items naming real functions/classes/exports visible above. A short or simple file may have one or two; do not pad.
+- dependencies: up to 5 real imports. Empty array if there are none.
+- relatedFiles: only paths referenced in the code (e.g. relative imports). Empty array if none.`;
+
+    const completion = await withAiSlot(signal, () =>
+      getGroqClient().chat.completions.create(
+        {
+          model: getConfig().models.large,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature: 0.2,
+          max_tokens: 2200,
+          ...modelOptions(getConfig().models.large),
+        },
+        { signal },
+      ),
+    );
+    const parsed = parseJsonCompletion(completion.choices[0]?.message?.content ?? '', explainFileOutputSchema, {
+      required: ['purpose'],
+    });
+
+    // Evidence check for related files against the tree at the same commit.
+    const tree = await getTree(snapshot.owner, snapshot.repo, snapshot.commitSha, signal);
+    const treePaths = new Set(tree.files.map((f) => f.path));
+    const baseDir = body.filePath.split('/').slice(0, -1).join('/');
+    const relatedFiles = checkPaths(parsed.relatedFiles, treePaths, baseDir).filter((f) => f.path !== body.filePath);
+
+    if (signal.aborted) return;
+    res.json({ ...parsed, relatedFiles, meta });
   } catch (err) {
     if (signal.aborted) return;
-    if (err instanceof GroqResponseError) {
-      console.error('Explain file: unusable model response:', err.message);
-      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
-      return;
-    }
-    console.error('Explain file error:', err);
-    res.status(500).json({ error: 'Failed to explain file' });
+    sendError(res, err, 'explain-file');
   }
 });
 
 // Fast, low-detail pass so the panel has something to show almost immediately while
-// the full explanation above (larger model, more tokens) is still in flight. Runs on
-// Groq's instant/small model with a much smaller prompt and output budget.
+// the full explanation above is still in flight. Small model, small prompt.
 explainFileRouter.post('/quick', validateBody(explainFileSchema), async (req: Request, res: Response) => {
-  const { repoOwner, repoName, filePath, fileContent } = req.body as ExplainFileBody;
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-  const controller = new AbortController();
-  res.on('close', () => controller.abort());
-  const { signal } = controller;
-
-  const prompt = `Give a fast, high-level orientation to a single file for a developer who just opened it.
-
-Repository: ${repoOwner}/${repoName}
-File: ${filePath}
-
-Contents (may be truncated):
-${(fileContent || '').slice(0, 2500)}
-
-Respond with ONLY valid JSON. No markdown, no code blocks, no extra text.
-
-{
-  "purpose": "1 sentence: what this file is responsible for and why it exists",
-  "summary": "1-2 sentence plain-English walkthrough of what the file does"
-}`;
+  const body = req.body as ExplainFileBody;
+  const signal = requestSignal(req, res);
 
   try {
-    const completion = await groq.chat.completions.create(
-      {
-        model: 'llama-3.1-8b-instant',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        max_tokens: 220,
-      },
-      { signal },
+    const { snapshot, excerpt, meta } = await loadFile(body, QUICK_ANALYSIS_CHARS, signal);
+    const completion = await withAiSlot(signal, () =>
+      getGroqClient().chat.completions.create(
+        {
+          model: getConfig().models.small,
+          messages: [
+            {
+              role: 'system',
+              content: `Give a fast, factual orientation to a single file.\n\n${OUTPUT_STYLE_RULES}\n\n${UNTRUSTED_DATA_RULES}\n\nRespond with ONLY valid JSON: {"purpose": "1 sentence", "summary": "1-2 sentences"}`,
+            },
+            { role: 'user', content: `${fileHeader(snapshot, meta)}\n\n${untrusted('file_content', excerpt)}` },
+          ],
+          temperature: 0.2,
+          max_tokens: 700,
+          ...modelOptions(getConfig().models.small),
+        },
+        { signal },
+      ),
     );
+    const parsed = parseJsonCompletion(completion.choices[0]?.message?.content ?? '', explainFileQuickOutputSchema, {
+      required: ['purpose'],
+    });
     if (signal.aborted) return;
-
-    const raw = completion.choices[0]?.message?.content ?? '';
-    res.json(parseJsonCompletion(raw, explainFileQuickOutputSchema));
+    res.json({ ...parsed, meta });
   } catch (err) {
     if (signal.aborted) return;
-    if (err instanceof GroqResponseError) {
-      console.error('Quick explain file: unusable model response:', err.message);
-      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
-      return;
-    }
-    console.error('Quick explain file error:', err);
-    res.status(500).json({ error: 'Failed to quickly explain file' });
+    sendError(res, err, 'explain-file-quick');
   }
 });

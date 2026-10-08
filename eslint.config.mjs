@@ -33,7 +33,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.test.ts', '**/*.test.tsx'],
+    files: ['**/*.test.ts', '**/*.test.tsx', 'apps/extension/src/test/**/*.ts'],
     rules: {
       // Test doubles/partial mocks commonly use `any` for brevity — different bar
       // than production code.

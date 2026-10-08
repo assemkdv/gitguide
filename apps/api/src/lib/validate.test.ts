@@ -14,17 +14,22 @@ function mockReqRes(body: unknown) {
 
 describe('validateBody', () => {
   it('calls next() and passes through a valid, fully-specified body', () => {
-    const { req, res, next } = mockReqRes({ repoOwner: 'owner', repoName: 'repo', filePath: 'a.ts', fileContent: 'x' });
+    const { req, res, next } = mockReqRes({ repoOwner: 'owner', repoName: 'repo', ref: 'main', filePath: 'a.ts' });
     validateBody(explainFileSchema)(req, res, next);
     expect(next).toHaveBeenCalledOnce();
-    expect(req.body).toEqual({ repoOwner: 'owner', repoName: 'repo', filePath: 'a.ts', fileContent: 'x' });
+    expect(req.body).toEqual({ repoOwner: 'owner', repoName: 'repo', ref: 'main', filePath: 'a.ts' });
   });
 
-  it('fills in schema defaults for optional fields', () => {
-    const { req, res, next } = mockReqRes({ repoOwner: 'o', repoName: 'r', issueNumber: 1, issueTitle: 'Bug' });
-    validateBody(analyzeSchema)(req, res, next);
-    expect(next).toHaveBeenCalledOnce();
-    expect(req.body).toMatchObject({ issueBody: '', issueComments: '' });
+  it('drops page content fields: the server never accepts file or issue text from the browser', () => {
+    const file = mockReqRes({ repoOwner: 'o', repoName: 'r', ref: 'main', filePath: 'a.ts', fileContent: 'secret DOM text' });
+    validateBody(explainFileSchema)(file.req, file.res, file.next);
+    expect(file.next).toHaveBeenCalledOnce();
+    expect(file.req.body).not.toHaveProperty('fileContent');
+
+    const issue = mockReqRes({ repoOwner: 'o', repoName: 'r', issueNumber: 1, issueTitle: 'Bug', issueBody: 'text', issueComments: 'c' });
+    validateBody(analyzeSchema)(issue.req, issue.res, issue.next);
+    expect(issue.next).toHaveBeenCalledOnce();
+    expect(issue.req.body).toEqual({ repoOwner: 'o', repoName: 'r', issueNumber: 1 });
   });
 
   it('responds 400 and does not call next() when a required field is missing', () => {
@@ -35,6 +40,7 @@ describe('validateBody', () => {
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({
         error: 'Invalid request body',
+        code: 'INVALID_REQUEST',
         details: expect.arrayContaining([expect.objectContaining({ path: 'repoName' })]),
       }),
     );
@@ -52,19 +58,14 @@ describe('validateBody', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('rejects fileContent over the configured size cap', () => {
-    const { req, res, next } = mockReqRes({
-      repoOwner: 'o',
-      repoName: 'r',
-      filePath: 'a.ts',
-      fileContent: 'x'.repeat(200_001),
-    });
+  it('requires a ref for explain-file (the file is read at an exact commit)', () => {
+    const { req, res, next } = mockReqRes({ repoOwner: 'o', repoName: 'r', filePath: 'a.ts' });
     validateBody(explainFileSchema)(req, res, next);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('rejects an issue title over the configured length cap', () => {
-    const { req, res, next } = mockReqRes({ repoOwner: 'o', repoName: 'r', issueNumber: 1, issueTitle: 'x'.repeat(501) });
+  it('rejects a non-integer issue number', () => {
+    const { req, res, next } = mockReqRes({ repoOwner: 'o', repoName: 'r', issueNumber: 1.5 });
     validateBody(analyzeSchema)(req, res, next);
     expect(next).not.toHaveBeenCalled();
   });

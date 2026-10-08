@@ -1,271 +1,224 @@
 import { useEffect, useRef, KeyboardEvent } from 'react';
-import { useStore, repoKeyOf, Citation } from '../store';
-import { loadRepoChatMessages, saveRepoChatMessages, clearRepoChatMessages } from '../storage';
-import { buildChatHistory } from '../chat-history';
+import { useStore, ChatMessage, IndexInfo } from '../store';
+import { sendChatMessage, stopChat, retryAnswer, clearConversation } from '../chat';
 import { BackButton, SC as C } from './shared';
+import { Markdown } from './Markdown';
 
-interface ChatStreamEvent {
-  type: string;
-  content?: string;
-  message?: string;
-  citations?: Citation[];
-  indexing?: 'partial' | 'complete';
+function shortSha(sha: string): string {
+  return sha ? sha.slice(0, 7) : '';
+}
+
+function IndexNote({ index }: { index: IndexInfo }) {
+  const where = `${index.ref}${index.commitSha ? ` @ ${shortSha(index.commitSha)}` : ''}`;
+  const searchKind = index.retrieval === 'hybrid' ? 'keyword + semantic search' : 'keyword search';
+  let coverage: string;
+  if (index.fullCoverage) coverage = `searched all ${index.indexedFiles} indexed files`;
+  else {
+    coverage = `searched ${index.indexedFiles} of ${index.eligibleFiles} files`;
+    if (index.treeTruncated) coverage += ' (GitHub truncated the file list)';
+  }
+  const stillIndexing = index.status === 'partial' || index.status === 'background-indexing';
+  return (
+    <div style={{ fontSize: 10.5, color: C.mutedDim, lineHeight: 1.5 }}>
+      Based on {where} · {coverage} · {searchKind}
+      {stillIndexing && ' · indexing more files in the background, later questions will see more'}
+      {index.status === 'failed' && ' · background indexing stopped early; GitGuide will retry later'}
+    </div>
+  );
+}
+
+function StatusNote({ message, isLast, streaming }: { message: ChatMessage; isLast: boolean; streaming: boolean }) {
+  const canRetry = isLast && !streaming && (message.status === 'error' || message.status === 'interrupted' || message.status === 'stopped');
+  let text: string | null = null;
+  let tone: string = C.mutedDim;
+  if (message.status === 'error') {
+    text = message.error?.message ?? 'Something went wrong.';
+    tone = '#f85149';
+  } else if (message.status === 'interrupted') {
+    text = 'The answer was interrupted before it finished.';
+    tone = '#d29922';
+  } else if (message.status === 'stopped') {
+    text = 'Stopped.';
+  } else if (message.status === 'complete' && message.finishReason === 'length') {
+    text = 'The answer reached the length limit and may be incomplete.';
+    tone = '#d29922';
+  }
+  if (!text && !canRetry) return null;
+  return (
+    <div role={message.status === 'error' ? 'alert' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: tone }}>
+      {text && <span>{text}</span>}
+      {canRetry && (
+        <button type="button" className="gg-linkbtn" onClick={() => retryAnswer(message.id)} style={{ border: `1px solid ${C.border}` }}>
+          Retry
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function AskGitGuidePage() {
-  const {
-    pageContext,
-    goToQuickActions,
-    chatMessages,
-    chatInput,
-    chatStreaming,
-    setChatInput,
-    addChatMessage,
-    appendToLastChatMessage,
-    setLastChatMessageCitations,
-    setLastChatMessageIndexingStatus,
-    setChatMessages,
-    setChatStreaming,
-    resetChat,
-  } = useStore();
-
+  const { pageContext, goToQuickActions, chatMessages, chatInput, chatStreaming, chatHydrated, chatStorageWarning, setChatInput } = useStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const loadedForRef = useRef('');
-  const portRef = useRef<ReturnType<typeof chrome.runtime.connect> | null>(null);
-
-  const repoKey = pageContext ? repoKeyOf(pageContext.repoOwner, pageContext.repoName) : null;
+  const statusRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
-    if (!repoKey || loadedForRef.current === repoKey) return;
-    loadedForRef.current = repoKey;
-    loadRepoChatMessages(repoKey).then((stored) => {
-      if (loadedForRef.current === repoKey) setChatMessages(stored);
-    });
-    // setChatMessages is a zustand action — stable across renders, safe to omit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoKey]);
-
-  // Disconnects any in-flight stream both on unmount and whenever the user switches to
-  // a different repository while this page is still mounted — a request answering a
-  // question about the previous repo must never keep writing into this view.
-  useEffect(() => {
-    return () => {
-      portRef.current?.disconnect();
-      portRef.current = null;
-    };
-  }, [repoKey]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ block: 'end' });
   }, [chatMessages]);
 
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const stop = (e: Event) => e.stopPropagation();
-    el.addEventListener('keydown', stop);
-    el.addEventListener('keyup', stop);
-    return () => {
-      el.removeEventListener('keydown', stop);
-      el.removeEventListener('keyup', stop);
-    };
+    textareaRef.current?.focus();
   }, []);
 
+  if (!pageContext) return null;
+
   const handleSend = () => {
-    const text = chatInput.trim();
-    if (!text || chatStreaming || !pageContext || !repoKey) return;
-
-    // Captured from the messages as they stand *before* this turn's user question and
-    // empty assistant placeholder are appended below — those aren't prior history yet.
-    const history = buildChatHistory(useStore.getState().chatMessages);
-
-    setChatInput('');
-    addChatMessage({ role: 'user', content: text });
-    saveRepoChatMessages(repoKey, useStore.getState().chatMessages);
-
-    addChatMessage({ role: 'assistant', content: '' });
-    setChatStreaming(true);
-
-    const port = chrome.runtime.connect({ name: 'chat-stream' });
-    portRef.current = port;
-    port.postMessage({
-      question: text,
-      context: {
-        repoOwner: pageContext.repoOwner,
-        repoName: pageContext.repoName,
-        ref: pageContext.page === 'file' ? pageContext.fileRef : undefined,
-      },
-      history,
-    });
-
-    port.onMessage.addListener((msg: ChatStreamEvent) => {
-      if (msg.type === 'citations' && msg.citations) {
-        setLastChatMessageCitations(msg.citations);
-      } else if (msg.type === 'status' && msg.indexing) {
-        setLastChatMessageIndexingStatus(msg.indexing);
-      } else if (msg.type === 'chunk' && msg.content) {
-        appendToLastChatMessage(msg.content);
-      } else if (msg.type === 'done' || msg.type === 'error') {
-        if (msg.type === 'error') {
-          appendToLastChatMessage('\n\n*Error: ' + (msg.message ?? 'Unknown error') + '*');
-        }
-        setChatStreaming(false);
-        port.disconnect();
-        if (portRef.current === port) portRef.current = null;
-        saveRepoChatMessages(repoKey, useStore.getState().chatMessages);
-      }
-    });
-
-    port.onDisconnect.addListener(() => setChatStreaming(false));
+    const result = sendChatMessage(chatInput);
+    // The Send button is replaced by Stop while streaming; keep focus in the panel.
+    textareaRef.current?.focus();
+    if (result === 'private' && statusRef.current) {
+      statusRef.current.textContent = 'GitGuide works with public repositories only, so nothing was sent.';
+    }
   };
 
-  const handleClearHistory = async () => {
-    if (!repoKey) return;
-    await clearRepoChatMessages(repoKey);
-    resetChat();
-  };
-
+  // GitHub never sees these keys (see content/keyboard-guard.ts), so Escape is allowed to
+  // bubble up to the panel, which closes it.
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    e.stopPropagation();
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  if (!pageContext) return null;
+  const lastAssistant = [...chatMessages].reverse().find((m) => m.role === 'assistant' && m.index?.ref);
+  const viewingRef = pageContext.page === 'file' ? pageContext.fileRef : undefined;
+  const refChanged = !!(viewingRef && lastAssistant?.index && lastAssistant.index.ref !== viewingRef);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${C.borderMuted}`, display: 'flex', alignItems: 'center', flexShrink: 0, background: C.bgSec }}>
         <BackButton onClick={goToQuickActions} />
-        <span style={{ color: C.muted, fontSize: 11, flex: 1 }}>
+        <span style={{ color: C.muted, fontSize: 11, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {pageContext.repoOwner}/{pageContext.repoName}
         </span>
         {chatMessages.length > 0 && (
           <button
-            onClick={handleClearHistory}
+            type="button"
+            className="gg-linkbtn"
+            onClick={() => void clearConversation()}
             disabled={chatStreaming}
-            title="Clear chat history for this repository"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: C.muted,
-              cursor: chatStreaming ? 'default' : 'pointer',
-              padding: '3px 16px 3px 6px',
-              borderRadius: 5,
-              fontSize: 11,
-              fontFamily: 'inherit',
-              opacity: chatStreaming ? 0.4 : 1,
-            }}
+            title="Delete this repository's conversation from this device"
+            style={{ marginRight: 10, opacity: chatStreaming ? 0.4 : 1, fontSize: 11 }}
           >
             Clear
           </button>
         )}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {chatMessages.length === 0 && (
+      <div
+        role="log"
+        aria-live="polite"
+        aria-busy={chatStreaming}
+        aria-label="Conversation"
+        style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 16 }}
+      >
+        {!chatHydrated && chatMessages.length === 0 && <p style={{ margin: 0, fontSize: 12, color: C.mutedDim }}>Loading conversation…</p>}
+        {chatHydrated && chatMessages.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginTop: 40, padding: '0 20px', gap: 8 }}>
             <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.textSub }}>Ask GitGuide about this repository&apos;s code.</p>
             <p style={{ margin: 0, fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
-              Answers are grounded in the actual source and cite the files they came from — try &ldquo;where is authentication
-              implemented?&rdquo; or &ldquo;trace the login flow&rdquo;.
+              Answers are based on excerpts GitGuide finds in the public source, with links to the exact lines. When the excerpts
+              don&apos;t show something, it will say so. Try &ldquo;where is authentication implemented?&rdquo;
             </p>
           </div>
         )}
 
-        {chatMessages.map((msg, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 600,
-                color: msg.role === 'user' ? C.accent : '#6e7681',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-              }}
-            >
-              {msg.role === 'user' ? 'You' : 'GitGuide'}
-            </span>
-            <div
-              style={{
-                background: msg.role === 'user' ? C.accentDim : C.bgSec,
-                border: `1px solid ${msg.role === 'user' ? C.accentBorder : C.borderMuted}`,
-                borderRadius: 10,
-                padding: '10px 13px',
-                fontSize: 13,
-                color: C.textSub,
-                lineHeight: 1.6,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}
-            >
-              {msg.content}
-              {msg.role === 'assistant' && chatStreaming && i === chatMessages.length - 1 && msg.content === '' && (
-                <span style={{ color: C.muted }}>Thinking…</span>
+        {chatMessages.map((msg, i) => {
+          const isLast = i === chatMessages.length - 1;
+          return (
+            <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: msg.role === 'user' ? C.accent : '#6e7681', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {msg.role === 'user' ? 'You' : 'GitGuide'}
+              </span>
+              <div
+                style={{
+                  background: msg.role === 'user' ? C.accentDim : C.bgSec,
+                  border: `1px solid ${msg.role === 'user' ? C.accentBorder : C.borderMuted}`,
+                  borderRadius: 10,
+                  padding: '10px 13px',
+                  fontSize: 13,
+                  color: C.textSub,
+                  lineHeight: 1.6,
+                }}
+              >
+                {msg.role === 'user' ? (
+                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+                ) : msg.content ? (
+                  <Markdown text={msg.content} />
+                ) : msg.status === 'streaming' ? (
+                  <span style={{ color: C.muted }}>{msg.index ? 'Thinking…' : 'Reading the repository…'}</span>
+                ) : (
+                  <span style={{ color: C.mutedDim }}>No answer.</span>
+                )}
+              </div>
+
+              {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }} aria-label="Sources">
+                  {msg.citations.map((c, ci) => (
+                    <a
+                      key={ci}
+                      href={c.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`Open ${c.path} lines ${c.startLine}–${c.endLine} on GitHub (new tab)`}
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                        fontSize: 10.5,
+                        color: C.muted,
+                        background: C.bgTer,
+                        border: `1px solid ${C.borderMuted}`,
+                        borderRadius: 5,
+                        padding: '3px 7px',
+                        textDecoration: 'underline',
+                        textDecorationColor: C.border,
+                        wordBreak: 'break-all',
+                      }}
+                    >
+                      [{ci + 1}] {c.path}:{c.startLine}
+                      {c.endLine !== c.startLine ? `-${c.endLine}` : ''}
+                    </a>
+                  ))}
+                </div>
               )}
+              {msg.role === 'assistant' && msg.index && msg.status !== 'error' && <IndexNote index={msg.index} />}
+              {msg.role === 'assistant' && <StatusNote message={msg} isLast={isLast} streaming={chatStreaming} />}
             </div>
-
-            {msg.role === 'assistant' && msg.citations && msg.citations.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {msg.citations.map((c, ci) => (
-                  <a
-                    key={ci}
-                    href={c.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={`Open ${c.path} at line ${c.startLine} on GitHub`}
-                    style={{
-                      fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-                      fontSize: 10.5,
-                      color: C.muted,
-                      background: C.bgTer,
-                      border: `1px solid ${C.borderMuted}`,
-                      borderRadius: 5,
-                      padding: '3px 7px',
-                      textDecoration: 'none',
-                    }}
-                  >
-                    {c.path}:{c.startLine}
-                    {c.endLine !== c.startLine ? `-${c.endLine}` : ''}
-                  </a>
-                ))}
-              </div>
-            )}
-
-            {msg.role === 'assistant' && msg.indexingStatus === 'partial' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: C.mutedDim }}>
-                <span
-                  style={{
-                    width: 5,
-                    height: 5,
-                    borderRadius: '50%',
-                    background: C.mutedDim,
-                    flexShrink: 0,
-                    animation: 'pulse 1.4s ease-in-out infinite',
-                  }}
-                />
-                Indexing the rest of the repository in the background — later questions will draw on more of the codebase.
-              </div>
-            )}
-          </div>
-        ))}
-
+          );
+        })}
         <div ref={bottomRef} />
       </div>
 
+      {(refChanged || chatStorageWarning) && (
+        <div style={{ padding: '6px 14px', fontSize: 11, color: '#d29922', borderTop: `1px solid ${C.borderMuted}`, lineHeight: 1.5 }} role="status">
+          {refChanged && <div>Earlier answers were about {lastAssistant?.index?.ref}. New questions will use {viewingRef}.</div>}
+          {chatStorageWarning && <div>{chatStorageWarning}</div>}
+        </div>
+      )}
+      <p ref={statusRef} role="status" className="gg-sr-only" />
+
       <div style={{ padding: '10px 14px', borderTop: `1px solid ${C.borderMuted}`, display: 'flex', gap: 8, alignItems: 'flex-end', flexShrink: 0, background: C.bg }}>
+        <label htmlFor="gg-chat-input" className="gg-sr-only">
+          Ask about this repository
+        </label>
         <textarea
+          id="gg-chat-input"
           ref={textareaRef}
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          onKeyUp={(e) => e.stopPropagation()}
           placeholder="Ask about this repository's code…"
           rows={1}
-          disabled={chatStreaming}
+          maxLength={2000}
           style={{
             flex: 1,
             background: C.bgTer,
@@ -276,17 +229,10 @@ export function AskGitGuidePage() {
             fontSize: 13,
             fontFamily: 'inherit',
             resize: 'none',
-            outline: 'none',
             lineHeight: 1.5,
             minHeight: 36,
             maxHeight: 120,
             overflowY: 'auto',
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = C.accent;
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = C.borderMuted;
           }}
           onInput={(e) => {
             const el = e.currentTarget;
@@ -294,36 +240,56 @@ export function AskGitGuidePage() {
             el.style.height = Math.min(el.scrollHeight, 120) + 'px';
           }}
         />
-        <button
-          onClick={handleSend}
-          disabled={!chatInput.trim() || chatStreaming}
-          aria-label="Send message"
-          title="Send message"
-          style={{
-            width: 34,
-            height: 34,
-            background: chatInput.trim() && !chatStreaming ? C.accent : C.bgTer,
-            color: chatInput.trim() && !chatStreaming ? C.bg : C.muted,
-            border: `1px solid ${chatInput.trim() && !chatStreaming ? C.accent : C.borderMuted}`,
-            borderRadius: '50%',
-            fontSize: 14,
-            cursor: chatInput.trim() && !chatStreaming ? 'pointer' : 'default',
-            fontFamily: 'inherit',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'background 0.15s, border-color 0.15s',
-          }}
-        >
-          {chatStreaming ? (
-            <span style={{ fontSize: 11 }}>…</span>
-          ) : (
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        {chatStreaming ? (
+          <button
+            type="button"
+            onClick={() => {
+              stopChat();
+              textareaRef.current?.focus();
+            }}
+            aria-label="Stop generating"
+            title="Stop generating"
+            style={{
+              height: 34,
+              padding: '0 12px',
+              background: C.bgTer,
+              color: C.text,
+              border: `1px solid ${C.border}`,
+              borderRadius: 17,
+              fontSize: 12,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              flexShrink: 0,
+            }}
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!chatInput.trim()}
+            aria-label="Send message"
+            title="Send message"
+            style={{
+              width: 34,
+              height: 34,
+              background: chatInput.trim() ? C.accent : C.bgTer,
+              color: chatInput.trim() ? C.bg : C.muted,
+              border: `1px solid ${chatInput.trim() ? C.accent : C.borderMuted}`,
+              borderRadius: '50%',
+              cursor: chatInput.trim() ? 'pointer' : 'default',
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path d="M6 10V2M2 6l4-4 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   );

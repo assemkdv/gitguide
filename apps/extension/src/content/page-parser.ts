@@ -253,3 +253,31 @@ export function parseGitHubPage(): IssuePageInfo {
 export function isFileContentReady(fileContent?: string): boolean {
   return !!fileContent && fileContent.trim().length >= 20;
 }
+
+export type RepoVisibility = 'public' | 'private' | 'unknown';
+
+/**
+ * Best-effort, local-only check of whether the repository on this page is private, so
+ * GitGuide can refuse *before* sending anything (even identifiers) to its server. The
+ * server independently verifies every repository is public, so 'unknown' is safe to
+ * treat as "ask the server".
+ *
+ * Signals, in order: GitHub's analytics meta tags (only trusted when they name this
+ * exact repository, since GitHub's SPA can leave a previous page's tags behind), then
+ * the "Private"/"Internal" label in the repository header.
+ */
+export function detectRepoVisibility(repoOwner: string, repoName: string): RepoVisibility {
+  const nwo = document.querySelector<HTMLMetaElement>('meta[name="octolytics-dimension-repository_nwo"]')?.content;
+  const isPublic = document.querySelector<HTMLMetaElement>('meta[name="octolytics-dimension-repository_public"]')?.content;
+  if (nwo && nwo.toLowerCase() === `${repoOwner}/${repoName}`.toLowerCase()) {
+    if (isPublic === 'false') return 'private';
+    if (isPublic === 'true') return 'public';
+  }
+
+  const header = document.querySelector('#repository-container-header') ?? document.querySelector('[data-testid="repository-container-header"]');
+  if (header) {
+    const labels = Array.from(header.querySelectorAll<HTMLElement>('.Label, [class*="Label"]'));
+    if (labels.some((label) => /^(private|internal)$/i.test(label.textContent?.trim() ?? ''))) return 'private';
+  }
+  return 'unknown';
+}

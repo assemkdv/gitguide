@@ -1,116 +1,141 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { installChromeMock, ChromeMock } from '../test/chrome-mock';
+import {
+  cacheKeys,
+  clearAllHistoryAndCaches,
+  fingerprint,
+  loadCached,
+  loadPanelWidth,
+  loadRepoChatMessages,
+  pruneExpiredCache,
+  sanitizePanelWidth,
+  saveCached,
+  saveRepoChatMessages,
+  MAX_STORED_MESSAGES,
+  DEFAULT_PANEL_WIDTH,
+} from './storage';
+import { normalizeFileResult } from './validate';
 
-// Minimal in-memory mock of the chrome.storage.local surface storage.ts relies on.
-function installChromeStorageMock() {
-  const store = new Map<string, unknown>();
+let chrome: ChromeMock;
+beforeEach(() => {
+  chrome = installChromeMock();
+});
 
-  const local = {
-    get: vi.fn(async (query: string | string[] | null) => {
-      if (query === null) {
-        return Object.fromEntries(store.entries());
-      }
-      const keys = Array.isArray(query) ? query : [query];
-      const result: Record<string, unknown> = {};
-      for (const k of keys) {
-        if (store.has(k)) result[k] = store.get(k);
-      }
-      return result;
-    }),
-    set: vi.fn(async (items: Record<string, unknown>) => {
-      for (const [k, v] of Object.entries(items)) store.set(k, v);
-    }),
-    remove: vi.fn(async (keys: string | string[]) => {
-      for (const k of Array.isArray(keys) ? keys : [keys]) store.delete(k);
-    }),
-  };
+const result = (purpose: string) => ({ purpose, relatedFiles: [] });
 
-  (globalThis as any).chrome = { storage: { local } };
-  return store;
-}
-
-describe('storage cache scoping and lifecycle', () => {
-  let store: Map<string, unknown>;
-
-  beforeEach(() => {
-    vi.resetModules();
-    store = installChromeStorageMock();
+describe('cache scoping and lifecycle', () => {
+  it('scopes file entries by repo + ref + path', async () => {
+    await saveCached(cacheKeys.file('o', 'r', 'main', 'a.ts'), result('main'), 60_000);
+    expect(await loadCached(cacheKeys.file('o', 'r', 'dev', 'a.ts'), normalizeFileResult)).toBeNull();
+    expect(await loadCached(cacheKeys.file('o', 'other', 'main', 'a.ts'), normalizeFileResult)).toBeNull();
+    expect((await loadCached(cacheKeys.file('o', 'r', 'main', 'a.ts'), normalizeFileResult))?.purpose).toBe('main');
   });
 
-  it('scopes file cache entries by repo + ref + path, not just repo + path', async () => {
-    const { loadFileCache, saveFileCache } = await import('./storage');
-    const result = { purpose: 'p', summary: 's', mainComponents: [], inputsOutputs: '', dependencies: [], usedBy: '', connections: '', importantLogic: '', edgeCases: '', contributorNotes: '', relatedFiles: [] };
-
-    await saveFileCache('owner/repo', 'main', 'src/index.ts', result);
-
-    expect(await loadFileCache('owner/repo', 'main', 'src/index.ts')).toEqual(result);
-    // A different ref (e.g. a feature branch) for the exact same path must not hit the
-    // same cache entry — the file content can legitimately differ between branches.
-    expect(await loadFileCache('owner/repo', 'feature-branch', 'src/index.ts')).toBeNull();
+  it('treats owner/repo case-insensitively (GitHub does)', () => {
+    expect(cacheKeys.repo('Owner', 'Repo')).toBe(cacheKeys.repo('owner', 'repo'));
   });
 
-  it('scopes issue cache entries by issue number', async () => {
-    const { loadIssueCache, saveIssueCache } = await import('./storage');
-    const result = { whatItAsks: [], whyItMatters: '', currentBehavior: '', expectedBehavior: '', discussionContext: '', relevantFiles: [], implementationSteps: [], risks: '', testingConsiderations: '', difficulty: 'beginner' as const, timeEstimate: '' };
-
-    await saveIssueCache('owner/repo', 42, result);
-
-    expect(await loadIssueCache('owner/repo', 42)).toEqual(result);
-    expect(await loadIssueCache('owner/repo', 43)).toBeNull();
+  it('treats an expired entry as a miss', async () => {
+    chrome.store[cacheKeys.repo('o', 'r')] = { data: { purpose: 'x' }, savedAt: 0, expiresAt: Date.now() - 1 };
+    expect(await loadCached(cacheKeys.repo('o', 'r'), normalizeFileResult)).toBeNull();
   });
 
-  it('treats an expired entry as a cache miss', async () => {
-    const { loadRepoCache } = await import('./storage');
-    store.set('cache:repo:owner/repo', { data: { purpose: 'stale' }, savedAt: Date.now() - 1_000_000, expiresAt: Date.now() - 1 });
-
-    expect(await loadRepoCache('owner/repo')).toBeNull();
+  it('treats malformed entries and malformed data as a miss', async () => {
+    chrome.store['cache:v2:a'] = 'garbage';
+    chrome.store['cache:v2:b'] = { data: { purpose: 42 }, expiresAt: Date.now() + 1000 };
+    expect(await loadCached('cache:v2:a', normalizeFileResult)).toBeNull();
+    expect(await loadCached('cache:v2:b', normalizeFileResult)).toBeNull();
   });
 
-  it('does not crash and treats malformed cache entries as a miss', async () => {
-    const { loadRepoCache } = await import('./storage');
-    store.set('cache:repo:owner/repo', 'not-an-object');
-
-    await expect(loadRepoCache('owner/repo')).resolves.toBeNull();
+  it('invalidates when the content fingerprint differs', async () => {
+    await saveCached('cache:v2:f', result('old'), 60_000, fingerprint('v1'));
+    expect(await loadCached('cache:v2:f', normalizeFileResult, fingerprint('v2'))).toBeNull();
+    expect(await loadCached('cache:v2:f', normalizeFileResult, fingerprint('v1'))).not.toBeNull();
   });
 
-  it('prunes only expired cache: entries, leaving chat history and fresh entries untouched', async () => {
-    const { pruneExpiredCache } = await import('./storage');
-    const now = Date.now();
-
-    store.set('cache:repo:owner/repo', { data: {}, savedAt: now - 100, expiresAt: now - 1 }); // expired
-    store.set('cache:file:owner/repo:main:a.ts', { data: {}, savedAt: now, expiresAt: now + 100_000 }); // fresh
-    store.set('chat:owner/repo', [{ role: 'user', content: 'where is auth' }]); // never pruned — no TTL
-
+  it('prunes expired and pre-v2 cache entries and the old data-notice record, leaving chats, settings, and fresh entries', async () => {
+    chrome.store['cache:v2:fresh'] = { data: 1, savedAt: 1, expiresAt: Date.now() + 60_000 };
+    chrome.store['cache:v2:old'] = { data: 1, savedAt: 1, expiresAt: Date.now() - 1 };
+    chrome.store['cache:repo:o/r'] = { data: 1, expiresAt: Date.now() + 60_000 };
+    chrome.store['chat:v2:o/r'] = { messages: [] };
+    chrome.store['settings:panelWidth'] = 400;
+    chrome.store['settings:dataNotice'] = { version: 1 };
     await pruneExpiredCache();
-
-    expect(store.has('cache:repo:owner/repo')).toBe(false);
-    expect(store.has('cache:file:owner/repo:main:a.ts')).toBe(true);
-    expect(store.has('chat:owner/repo')).toBe(true);
+    expect(Object.keys(chrome.store).sort()).toEqual(['cache:v2:fresh', 'chat:v2:o/r', 'settings:panelWidth']);
   });
 
-  it('round-trips chat messages under their own key', async () => {
-    const { loadRepoChatMessages, saveRepoChatMessages, clearRepoChatMessages } = await import('./storage');
-    const messages = [
-      { role: 'user' as const, content: 'where is auth?' },
-      {
-        role: 'assistant' as const,
-        content: 'It is in src/auth.ts [1].',
-        citations: [{ path: 'src/auth.ts', startLine: 1, endLine: 10, url: 'https://github.com/owner/repo/blob/main/src/auth.ts#L1-L10' }],
-        indexingStatus: 'complete' as const,
-      },
+  it('frees space and retries once on a quota error; never throws', async () => {
+    chrome.store['cache:v2:oldest'] = { data: 1, savedAt: 1, expiresAt: Date.now() + 60_000 };
+    let failures = 1;
+    const realSet = (globalThis as any).chrome.storage.local.set;
+    (globalThis as any).chrome.storage.local.set = async (items: Record<string, unknown>) => {
+      if (failures-- > 0) throw new Error('QUOTA_BYTES quota exceeded');
+      return realSet(items);
+    };
+    expect(await saveCached('cache:v2:new', result('n'), 60_000)).toBe(true);
+    expect(chrome.store['cache:v2:oldest']).toBeUndefined();
+
+    chrome.failSetWith = new Error('QUOTA_BYTES quota exceeded');
+    (globalThis as any).chrome.storage.local.set = realSet;
+    await expect(saveCached('cache:v2:x', result('x'), 60_000)).resolves.toBe(false);
+  });
+});
+
+describe('chat history storage', () => {
+  it('round-trips messages and caps how many are stored', async () => {
+    const messages = Array.from({ length: MAX_STORED_MESSAGES + 5 }, (_, i) => ({ id: `m${i}`, role: 'user' as const, content: `m${i}` }));
+    expect(await saveRepoChatMessages('o/r', messages)).toBe(true);
+    const loaded = await loadRepoChatMessages('o/r');
+    expect(loaded.ok).toBe(true);
+    expect(loaded.messages).toHaveLength(MAX_STORED_MESSAGES);
+    expect(loaded.messages[0].content).toBe('m5');
+  });
+
+  it('migrates the pre-v2 array format and marks a mid-stream message as interrupted', async () => {
+    chrome.store['chat:o/r'] = [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'half', status: 'streaming' },
     ];
-
-    await saveRepoChatMessages('owner/repo', messages);
-
-    expect(await loadRepoChatMessages('owner/repo')).toEqual(messages);
-
-    await clearRepoChatMessages('owner/repo');
-    expect(await loadRepoChatMessages('owner/repo')).toEqual([]);
+    const { messages } = await loadRepoChatMessages('o/r');
+    expect(messages.map((m) => m.status)).toEqual([undefined, 'interrupted']);
+    expect(messages.every((m) => m.id)).toBe(true);
   });
 
-  it('returns [] for chat messages when the stored value is not an array', async () => {
-    const { loadRepoChatMessages } = await import('./storage');
-    store.set('chat:owner/repo', 'not-an-array');
+  it('returns no messages for a non-array value', async () => {
+    chrome.store['chat:v2:o/r'] = { messages: 'nope' };
+    expect((await loadRepoChatMessages('o/r')).messages).toEqual([]);
+  });
 
-    expect(await loadRepoChatMessages('owner/repo')).toEqual([]);
+  it('clearAllHistoryAndCaches removes chats and caches but keeps settings', async () => {
+    chrome.store['chat:v2:o/r'] = { messages: [] };
+    chrome.store['chat:o/legacy'] = [];
+    chrome.store['cache:v2:x'] = {};
+    chrome.store['settings:panelWidth'] = 400;
+    expect(await clearAllHistoryAndCaches()).toBe(true);
+    expect(Object.keys(chrome.store)).toEqual(['settings:panelWidth']);
+  });
+});
+
+describe('settings', () => {
+  it.each([
+    ['abc', DEFAULT_PANEL_WIDTH],
+    [NaN, DEFAULT_PANEL_WIDTH],
+    [{}, DEFAULT_PANEL_WIDTH],
+    ['500', 500],
+    [9999, 650],
+    [-5, 320],
+    [410.6, 411],
+  ])('sanitizes a stored width of %s to %s', (raw, expected) => {
+    expect(sanitizePanelWidth(raw)).toBe(expected);
+  });
+
+  it('never makes the panel wider than the viewport allows', () => {
+    expect(sanitizePanelWidth(600, 500)).toBe(452);
+    expect(sanitizePanelWidth(600, 200)).toBe(240);
+  });
+
+  it('loads a corrupted stored width as the default instead of NaN', async () => {
+    chrome.store['settings:panelWidth'] = 'not a number';
+    expect(await loadPanelWidth()).toBe(DEFAULT_PANEL_WIDTH);
   });
 });

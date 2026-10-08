@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useStore, repoKeyOf } from './store';
+import { useStore, repoKeyOf, PanelView } from './store';
 import { EmptyState } from './components/EmptyState';
 import { HomeView } from './components/HomeView';
 import { ResultPage } from './components/ResultPage';
 import { AskGitGuidePage } from './components/AskGitGuidePage';
+import { SettingsView } from './components/DataNotice';
+import { MARKDOWN_CSS } from './components/Markdown';
 import { parseGitHubPage } from '../content/page-parser';
 import { parseFileRouteFromUrl, startFileDetection, cancelFileDetection, isSameFileRoute } from './file-detection';
 import { devLog } from './dev-log';
-import { pruneExpiredCache } from './storage';
+import { pruneExpiredCache, loadPanelWidth, savePanelWidth, sanitizePanelWidth, DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH } from './storage';
+import { hydrateChat } from './chat';
+import { openSettings } from './actions';
 
 const C = {
   bg: '#0d1117',
@@ -22,9 +26,15 @@ const C = {
   logoBg: 'linear-gradient(135deg, #171b2e 0%, #0a0b12 100%)',
 } as const;
 
-const MIN_WIDTH = 320;
-const MAX_WIDTH = 650;
-const DEFAULT_WIDTH = 400;
+const LEGACY_WIDTH_KEY = 'gitguide-panel-width';
+/** Below this window width the panel overlays the page instead of squeezing it. */
+const OVERLAY_BREAKPOINT = 760;
+
+/** After a repository change, views tied to the old page go back to Quick Actions;
+ * the settings screen stays where it is. */
+function viewAfterRepoChange(view: PanelView): PanelView {
+  return view === 'settings' ? view : 'home';
+}
 
 function LogoGlyph({ size = 14, color = C.accentText }: { size?: number; color?: string }) {
   return (
@@ -68,14 +78,44 @@ function LogoIcon({ size = 20, color = C.accentText }: { size?: number; color?: 
 export default function App() {
   const { isOpen, view, pageContext, setOpen, setView, setPageContext } = useStore();
 
-  const [panelWidth, setPanelWidth] = useState(() => {
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [preferredWidth, setPreferredWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const panelWidth = sanitizePanelWidth(preferredWidth, viewportWidth);
+  const overlay = viewportWidth < OVERLAY_BREAKPOINT;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Saved width lives in extension storage. Older versions kept it in github.com's own
+  // localStorage; migrate it once (sanitized — a corrupted value used to produce NaN)
+  // and remove it from the page's storage.
+  useEffect(() => {
+    let legacy: string | null = null;
     try {
-      const saved = localStorage.getItem('gitguide-panel-width');
-      return saved ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, parseInt(saved, 10))) : DEFAULT_WIDTH;
+      legacy = localStorage.getItem(LEGACY_WIDTH_KEY);
+      if (legacy != null) localStorage.removeItem(LEGACY_WIDTH_KEY);
     } catch {
-      return DEFAULT_WIDTH;
+      // Page storage unavailable — nothing to migrate.
     }
-  });
+    void loadPanelWidth().then((saved) => {
+      if (saved != null) setPreferredWidth(saved);
+      else if (legacy != null) {
+        const migrated = sanitizePanelWidth(legacy);
+        setPreferredWidth(migrated);
+        void savePanelWidth(migrated);
+      }
+    });
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Focus moves into the panel when it opens and back to the launcher when it closes.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) panelRef.current?.focus();
+    if (!isOpen && wasOpen.current) toggleRef.current?.focus();
+    wasOpen.current = isOpen;
+  }, [isOpen]);
 
   const [handleHovered, setHandleHovered] = useState(false);
   const isDraggingRef = useRef(false);
@@ -103,10 +143,12 @@ export default function App() {
   useEffect(() => {
     const el = pushStyleRef.current;
     if (!el) return;
-    el.textContent = isOpen
-      ? `body { margin-right: ${panelWidthRef.current}px !important; transition: margin-right 0.25s ease; }`
-      : `body { margin-right: 0px !important; transition: margin-right 0.25s ease; }`;
-  }, [isOpen]);
+    // On narrow windows the panel overlays the page rather than squeezing GitHub's layout.
+    el.textContent =
+      isOpen && !overlay
+        ? `body { margin-right: ${panelWidthRef.current}px !important; transition: margin-right 0.25s ease; }`
+        : '';
+  }, [isOpen, overlay, panelWidth]);
 
   const handleResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -119,9 +161,9 @@ export default function App() {
     document.body.style.userSelect = 'none';
 
     const onMouseMove = (ev: MouseEvent) => {
-      const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + (startX - ev.clientX)));
-      setPanelWidth(newWidth);
-      if (pushStyleRef.current) {
+      const newWidth = sanitizePanelWidth(startWidth + (startX - ev.clientX), window.innerWidth);
+      setPreferredWidth(newWidth);
+      if (pushStyleRef.current && window.innerWidth >= OVERLAY_BREAKPOINT) {
         pushStyleRef.current.textContent = `body { margin-right: ${newWidth}px !important; }`;
       }
     };
@@ -131,7 +173,7 @@ export default function App() {
       setHandleHovered(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      localStorage.setItem('gitguide-panel-width', String(panelWidthRef.current));
+      void savePanelWidth(panelWidthRef.current);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
@@ -140,11 +182,31 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
+  const handleResizeKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 50 : 10;
+    let next: number | null = null;
+    if (e.key === 'ArrowLeft') next = panelWidth + step;
+    if (e.key === 'ArrowRight') next = panelWidth - step;
+    if (e.key === 'Home') next = MAX_PANEL_WIDTH;
+    if (e.key === 'End') next = MIN_PANEL_WIDTH;
+    if (next == null) return;
+    e.preventDefault();
+    const width = sanitizePanelWidth(next, window.innerWidth);
+    setPreferredWidth(width);
+    void savePanelWidth(width);
+  };
+
+  const handlePanelKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      setOpen(false);
+    }
+  };
+
   // File routes are resolved from the URL alone (see file-detection.ts) — no DOM
   // access, so this branch runs and updates state before GitHub has painted anything.
   const updateFilePageContext = (fileRoute: NonNullable<ReturnType<typeof parseFileRouteFromUrl>>, navStart: number) => {
-    const { pageContext: prev, resetResults, resetChat, setFileResult, setFileQuickResult, setFileError } =
-      useStore.getState();
+    const { pageContext: prev, resetResults, resetFileResult } = useStore.getState();
 
     const prevRepoKey = prev ? repoKeyOf(prev.repoOwner, prev.repoName) : null;
     const nextRepoKey = repoKeyOf(fileRoute.repoOwner, fileRoute.repoName);
@@ -165,15 +227,17 @@ export default function App() {
 
     if (prevRepoKey !== nextRepoKey) {
       resetResults();
-      resetChat();
-      setView('home');
+      void hydrateChat(nextRepoKey);
+      setView(viewAfterRepoChange(useStore.getState().view));
     } else {
-      setFileResult(null);
-      setFileQuickResult(null);
-      setFileError(null);
+      resetFileResult();
     }
 
-    startFileDetection(fileRoute, navStart);
+    startFileDetection(fileRoute, navStart, {
+      // No previous context means the panel just mounted on a freshly loaded page.
+      inPlaceNavigation: prev !== null,
+      previousContent: prev?.page === 'file' ? prev.fileContent : undefined,
+    });
   };
 
   const updatePageContext = () => {
@@ -190,11 +254,13 @@ export default function App() {
     cancelFileDetection();
 
     const info = parseGitHubPage();
-    const { pageContext: prev, resetResults, resetChat, setIssueResult, setIssueError } = useStore.getState();
+    const { pageContext: prev, resetResults, resetIssueResult } = useStore.getState();
 
     if (!info.isRepoPage) {
       setPageContext(null);
-      setView('empty');
+      void hydrateChat(null);
+      const current = useStore.getState().view;
+      setView(current === 'settings' ? current : 'empty');
       return;
     }
 
@@ -228,8 +294,8 @@ export default function App() {
     if (prevRepoKey !== nextRepoKey) {
       // Switched to a different repository entirely — nothing carries over.
       resetResults();
-      resetChat();
-      setView('home');
+      void hydrateChat(nextRepoKey);
+      setView(viewAfterRepoChange(useStore.getState().view));
       return;
     }
 
@@ -238,8 +304,7 @@ export default function App() {
     // up the new target and re-analyzes automatically — no need to bounce back to
     // Quick Actions or ask them to click anything again.
     if (prev?.page === 'issue' && next.page === 'issue' && prev.issueNumber !== next.issueNumber) {
-      setIssueResult(null);
-      setIssueError(null);
+      resetIssueResult();
     }
   };
 
@@ -332,23 +397,30 @@ export default function App() {
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #484f58; border-radius: 99px; }
+        @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+        ${MARKDOWN_CSS}
       `}</style>
 
       {/* Floating toggle button */}
       <button
+        ref={toggleRef}
+        type="button"
         onClick={() => setOpen(!isOpen)}
         title={isOpen ? 'Close GitGuide' : 'Open GitGuide'}
+        aria-label={isOpen ? 'Close GitGuide panel' : 'Open GitGuide panel'}
+        aria-expanded={isOpen}
+        aria-controls="gitguide-panel"
         style={{
           position: 'fixed',
           bottom: 20,
-          right: isOpen ? panelWidth + 12 : 20,
+          right: isOpen && !overlay ? panelWidth + 12 : 20,
+          display: isOpen && overlay ? 'none' : 'flex',
           width: 40,
           height: 40,
           borderRadius: '50%',
           background: C.logoBg,
           border: `1px solid ${C.border}`,
           cursor: 'pointer',
-          display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           boxShadow: '0 1px 6px rgba(0,0,0,0.5)',
@@ -365,7 +437,7 @@ export default function App() {
         }}
       >
         {isOpen ? (
-          <span style={{ fontSize: 16, lineHeight: 1, marginTop: -1, color: C.accentText }}>←</span>
+          <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1, marginTop: -1, color: C.accentText }}>→</span>
         ) : (
           <LogoIcon size={20} />
         )}
@@ -375,6 +447,14 @@ export default function App() {
           panel below can keep its own state (scroll position, retry handlers) across
           open/close toggles instead of remounting from scratch every time. */}
       <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize GitGuide panel"
+        aria-valuemin={MIN_PANEL_WIDTH}
+        aria-valuemax={MAX_PANEL_WIDTH}
+        aria-valuenow={panelWidth}
+        tabIndex={isOpen ? 0 : -1}
+        onKeyDown={handleResizeKeyDown}
         onMouseDown={handleResizeMouseDown}
         onMouseEnter={() => setHandleHovered(true)}
         onMouseLeave={() => {
@@ -387,7 +467,7 @@ export default function App() {
           width: 8,
           height: '100vh',
           cursor: 'ew-resize',
-          zIndex: 2147483648,
+          zIndex: 2147483647,
           pointerEvents: isOpen ? 'all' : 'none',
           display: isOpen ? 'flex' : 'none',
           alignItems: 'center',
@@ -407,7 +487,15 @@ export default function App() {
 
       {/* Panel */}
       <div
+        id="gitguide-panel"
+        ref={panelRef}
+        role="complementary"
+        aria-label="GitGuide"
+        tabIndex={-1}
+        onKeyDown={handlePanelKeyDown}
         style={{
+          outline: 'none',
+          maxWidth: '100vw',
           position: 'fixed',
           top: 0,
           right: 0,
@@ -476,7 +564,21 @@ export default function App() {
             </div>
           </div>
 
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <button
+            type="button"
+            onClick={openSettings}
+            aria-label="Privacy and data settings"
+            title="Privacy & data"
+            style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', padding: '4px 6px', borderRadius: 6, display: 'flex' }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 1.5 L13.5 3.5 V7.5 C13.5 11 11 13.5 8 14.5 C5 13.5 2.5 11 2.5 7.5 V3.5 Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            aria-label="Close GitGuide panel"
             onClick={() => setOpen(false)}
             style={{
               background: 'none',
@@ -497,10 +599,11 @@ export default function App() {
               e.currentTarget.style.color = C.muted;
               e.currentTarget.style.background = 'none';
             }}
-            title="Close"
+            title="Close (Esc)"
           >
             ×
           </button>
+          </div>
         </div>
 
         {/* View content */}
@@ -509,6 +612,7 @@ export default function App() {
           {view === 'result' && <ResultPage />}
           {view === 'chat' && <AskGitGuidePage />}
           {view === 'empty' && <EmptyState />}
+          {view === 'settings' && <SettingsView />}
         </div>
       </div>
     </>

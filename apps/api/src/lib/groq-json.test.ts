@@ -57,3 +57,12 @@ describe('parseJsonCompletion', () => {
     });
   });
 });
+
+describe('parseJsonCompletion required fields', () => {
+  it('rejects a reply whose core fields are empty instead of returning a blank result', async () => {
+    const { z } = await import('zod');
+    const schema = z.object({ purpose: z.string().catch(''), items: z.array(z.string()).catch([]) });
+    expect(() => parseJsonCompletion('{}', schema, { required: ['purpose'] })).toThrow(GroqResponseError);
+    expect(parseJsonCompletion('{"purpose":"x"}', schema, { required: ['purpose'] })).toEqual({ purpose: 'x', items: [] });
+  });
+});

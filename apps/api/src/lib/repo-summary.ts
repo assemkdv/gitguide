@@ -1,100 +1,130 @@
-import { getRepoInfo, getReadme, getRepoTree, RepoInfo } from './github';
+import { getReadme, getTree, RepoSnapshot, RepoTree } from './github';
 import { getGroqClient } from './groq-client';
 import { parseJsonCompletion } from './groq-json';
 import { explainRepoOutputSchema } from './output-schemas';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from './prompt-safety';
+import { withAiSlot } from './ai-guard';
+import { getConfig } from './config';
+import { modelOptions } from './ai-models';
 import type { z } from 'zod';
 
 // The Groq prompt/parsing core shared by `/v1/explain-repo` and the RAG indexer's
-// "repository architecture summary" (generated once per repo+sha, injected into every
+// "repository architecture summary" (generated once per repo+commit, injected into every
 // ask-repo prompt so the model has whole-repo orientation before reading retrieved
-// chunks). One generator, two call sites — explain-repo.ts layers its own additional
-// entrypoint-LOC enrichment and good-first-issues fetch on top of this.
+// chunks). Everything is read from one immutable commit (`snapshot.commitSha`).
 
 export type RepoSummaryFields = z.infer<typeof explainRepoOutputSchema>;
 
-export interface RepoSummaryResult {
-  repoInfo: RepoInfo;
-  ref: string; // the ref actually used for the tree fetch (defaultBranch, unless overridden)
-  tree: string[];
-  summary: RepoSummaryFields;
+export const TREE_SAMPLE_SIZE = 300;
+
+export interface RepoSummaryCoverage {
+  filesInTree: number;
+  filesShownToModel: number;
+  treeTruncated: boolean;
+  readmeTruncated: boolean;
+  hasReadme: boolean;
 }
 
-export async function generateRepoSummary(
-  owner: string,
-  repo: string,
-  refOverride?: string,
-  signal?: AbortSignal,
-): Promise<RepoSummaryResult> {
-  const [repoInfo, readme] = await Promise.all([
-    getRepoInfo(owner, repo, signal),
-    getReadme(owner, repo, signal),
+export interface RepoSummaryResult {
+  tree: RepoTree;
+  summary: RepoSummaryFields;
+  coverage: RepoSummaryCoverage;
+}
+
+/** Shallow paths first, so a large repository's sample still shows its overall shape. */
+export function sampleTree(paths: string[], size = TREE_SAMPLE_SIZE): string[] {
+  return [...paths]
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))
+    .slice(0, size);
+}
+
+export async function generateRepoSummary(snapshot: RepoSnapshot, signal?: AbortSignal): Promise<RepoSummaryResult> {
+  const { owner, repo, repoInfo, commitSha } = snapshot;
+  const [readme, tree] = await Promise.all([
+    getReadme(owner, repo, commitSha, signal),
+    getTree(owner, repo, commitSha, signal),
   ]);
-  const ref = refOverride ?? repoInfo.defaultBranch;
-  const tree = await getRepoTree(owner, repo, ref, signal);
 
-  const treeSample = tree.slice(0, 300).join('\n');
-  const topLevelDirs = Array.from(
-    new Set(tree.map((p) => p.split('/')[0]).filter((seg) => !seg.includes('.'))),
-  ).slice(0, 25);
+  const paths = tree.files.map((f) => f.path);
+  const sample = sampleTree(paths);
+  const topLevelDirs = Array.from(new Set(paths.filter((p) => p.includes('/')).map((p) => p.split('/')[0]))).slice(0, 25);
 
-  const groq = getGroqClient();
+  const system = `You are a senior software engineer giving a new contributor a fast, accurate orientation to a codebase.
 
-  const prompt = `You are a senior software engineer giving a new contributor a thorough, fast orientation to a codebase.
+${OUTPUT_STYLE_RULES}
 
-Repository: ${owner}/${repo}
+${UNTRUSTED_DATA_RULES}
+
+Respond with ONLY valid JSON. No markdown, no code fences, no extra text.`;
+
+  const user = `Repository: ${owner}/${repo} (commit ${commitSha.slice(0, 7)})
 Description: ${repoInfo.description ?? 'None'}
 Primary language: ${repoInfo.language ?? 'Unknown'}
 
-README (truncated):
-${readme || 'No README found.'}
+README${readme.truncated ? ' (truncated)' : ''}:
+${untrusted('readme', readme.text || 'No README found.')}
 
-Top-level directories: ${topLevelDirs.join(', ') || 'none detected'}
+Top-level directories: ${topLevelDirs.join(', ') || 'none'}
 
-File tree (truncated, ${tree.length} files total):
-${treeSample || 'No files found.'}
+File tree (${sample.length} of ${paths.length} files shown${tree.truncated ? '; GitHub truncated the listing, so the repository has more files' : ''}):
+${untrusted('file_tree', sample.join('\n') || 'No files found.')}
 
-Respond with ONLY valid JSON. No markdown, no code blocks, no extra text.
-
+Return this JSON shape:
 {
   "purpose": "1-2 sentences: what this project is and who it's for",
-  "techStack": ["language/framework one", "language/framework two"],
-  "folderStructure": [
-    { "path": "top-level-dir", "description": "1 sentence on what lives here" }
-  ],
-  "architecture": [
-    { "title": "short concept name", "description": "one sentence, specific to this repo" }
-  ],
-  "entrypoints": [
-    { "path": "exact path copied from the file tree above", "label": "2-3 word role, e.g. Server entry" }
-  ],
-  "dataFlow": "2-3 sentences describing the main request/data flow through the system, naming real modules",
-  "authPersistence": "1-2 sentences on how auth and/or data persistence work, or empty string if not applicable to this project",
-  "howToRun": ["step one", "step two", "step three"],
-  "beginnerStart": "1-2 sentences pointing a beginner to a concrete first file or area to read"
+  "techStack": ["language/framework/tool visible in the README or file tree"],
+  "folderStructure": [{ "path": "top-level-dir", "description": "1 sentence on what lives here" }],
+  "architecture": [{ "title": "short concept name", "description": "one sentence, specific to this repo" }],
+  "entrypoints": [{ "path": "exact path copied from the file tree", "label": "2-3 word role" }],
+  "dataFlow": "2-3 sentences on the main request/data flow, naming real modules, or empty string if the data does not show it",
+  "authPersistence": "1-2 sentences on auth and/or persistence, or empty string if not shown",
+  "howToRun": ["step taken from the README or a manifest in the tree"],
+  "beginnerStart": "1-2 sentences pointing to a concrete first file or area to read"
 }
 
-RULES:
-- techStack: 3-8 concrete items (languages, frameworks, build tools, key libraries actually visible in the README/tree). No vague terms.
-- folderStructure: 3-6 items, only real top-level directories from the list above.
-- architecture: exactly 3 items, ordered by how a new contributor should learn them.
-- entrypoints: exactly 4 items, paths MUST be copied verbatim from the file tree list above — never invent a path.
-- howToRun: 3-6 concrete steps (install, configure env, run dev command) inferred from the README/package manifest conventions for this stack. If genuinely unknown, give the most likely convention for this stack rather than a vague placeholder.
-- Be concrete throughout: name real directories, real files, real frameworks found in the tree/README. No filler like "well-structured" or "modern codebase".`;
+Rules:
+- Only list items supported by the README, description, or file tree above. Small repositories may have only one or two items in a list, or none; do not pad lists.
+- techStack: up to 8 concrete items. folderStructure: up to 6 real directories from the list above. architecture: up to 4 items, ordered by how a new contributor should learn them.
+- entrypoints: up to 4 paths copied verbatim from the file tree. Never invent a path.
+- howToRun: only steps stated in the README or directly implied by a manifest that appears in the tree (e.g. package.json → npm install). If neither shows how to run the project, return an empty array.
+- Be concrete; no filler like "well-structured".`;
 
-  const completion = await groq.chat.completions.create(
-    {
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 1800,
-    },
-    { signal },
+  const completion = await withAiSlot(signal, () =>
+    getGroqClient().chat.completions.create(
+      {
+        model: getConfig().models.large,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        temperature: 0.2,
+        max_tokens: 2600,
+        ...modelOptions(getConfig().models.large),
+      },
+      { signal },
+    ),
   );
 
   const raw = completion.choices[0]?.message?.content ?? '';
-  const summary = parseJsonCompletion(raw, explainRepoOutputSchema);
+  const parsed = parseJsonCompletion(raw, explainRepoOutputSchema, { required: ['purpose'] });
+  const validPaths = new Set(paths);
+  const summary: RepoSummaryFields = {
+    ...parsed,
+    // Evidence check: an entrypoint the model named but that isn't in the tree is dropped.
+    entrypoints: parsed.entrypoints.filter((e) => validPaths.has(e.path)),
+  };
 
-  return { repoInfo, ref, tree, summary };
+  return {
+    tree,
+    summary,
+    coverage: {
+      filesInTree: paths.length,
+      filesShownToModel: sample.length,
+      treeTruncated: tree.truncated,
+      readmeTruncated: readme.truncated,
+      hasReadme: readme.text.length > 0,
+    },
+  };
 }
 
 /** Truncated, prompt-ready form of a repo summary — injected into every /v1/ask-repo

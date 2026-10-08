@@ -1,22 +1,22 @@
 import { useState } from 'react';
-import { useStore, CardType, PageContext } from '../store';
-import { runExplainRepo, runExplainFile, runSummarizeIssue, runGoodFirstIssues } from '../runActions';
+import { useStore, CardType } from '../store';
+import { requestAction } from '../actions';
 import { BookIcon, CodeIcon, MessageIcon, BranchIcon } from './cards';
 import { sectionLabel, SC as C } from './shared';
+import { DataDisclosure } from './DataNotice';
 
 interface ActionSpec {
   key: CardType;
   label: string;
   sub: string;
   icon: () => JSX.Element;
-  run: (ctx: PageContext) => void;
 }
 
 const ACTIONS: ActionSpec[] = [
-  { key: 'repo', label: 'Explain Repository', sub: 'High-level overview', icon: BookIcon, run: runExplainRepo },
-  { key: 'file', label: 'Explain File', sub: 'Current file breakdown', icon: CodeIcon, run: runExplainFile },
-  { key: 'issue', label: 'Summarize Issue', sub: 'TL;DR + context', icon: MessageIcon, run: runSummarizeIssue },
-  { key: 'good-first-issues', label: 'Find Good First Issue', sub: 'Where to contribute', icon: BranchIcon, run: runGoodFirstIssues },
+  { key: 'repo', label: 'Explain Repository', sub: 'High-level overview', icon: BookIcon },
+  { key: 'file', label: 'Explain File', sub: 'Current file breakdown', icon: CodeIcon },
+  { key: 'issue', label: 'Summarize Issue', sub: 'TL;DR + context', icon: MessageIcon },
+  { key: 'good-first-issues', label: 'Find Good First Issue', sub: 'Where to contribute', icon: BranchIcon },
 ];
 
 function ActionTile({ action, onClick }: { action: ActionSpec; onClick: () => void }) {
@@ -24,7 +24,10 @@ function ActionTile({ action, onClick }: { action: ActionSpec; onClick: () => vo
   const Icon = action.icon;
   return (
     <button
+      type="button"
       onClick={onClick}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -73,11 +76,11 @@ function AskGitGuideIcon() {
 }
 
 export function HomeView() {
-  const { pageContext, setView, chatMessages } = useStore();
+  const { pageContext, chatMessages } = useStore();
 
   if (!pageContext) return null;
 
-  const handleActionClick = (action: ActionSpec) => action.run(pageContext);
+  const handleActionClick = (action: ActionSpec) => requestAction(action.key);
   const hasExistingChat = chatMessages.length > 0;
 
   return (
@@ -92,13 +95,18 @@ export function HomeView() {
         ))}
       </div>
 
+      <div style={{ padding: '6px 16px 0' }}>
+        <DataDisclosure />
+      </div>
+
       <div style={{ padding: '12px 16px 0' }}>
         <span style={sectionLabel}>Chat</span>
       </div>
 
       <div style={{ padding: '8px 16px 16px' }}>
         <button
-          onClick={() => setView('chat')}
+          type="button"
+          onClick={() => requestAction('chat')}
           style={{
             width: '100%',
             textAlign: 'left',

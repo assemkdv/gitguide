@@ -1,20 +1,14 @@
 import { create } from 'zustand';
+import type { UiError } from './api-client';
 
-export type PanelView = 'home' | 'result' | 'chat' | 'empty';
+export type { UiError };
+export type PanelView = 'home' | 'result' | 'chat' | 'empty' | 'settings';
 export type PageKind = 'repo' | 'file' | 'issue';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 export type CardType = 'repo' | 'file' | 'issue' | 'good-first-issues';
 
 // Pipeline stages for turning a detected file route into ready-to-analyze content.
-// 'streaming' is reserved for a future SSE-based explain-file call; the current
-// backend responds in one shot, so 'request_started' goes straight to 'complete'.
-export type FileDetectionStage =
-  | 'file_detected'
-  | 'waiting_for_content'
-  | 'content_extracted'
-  | 'request_started'
-  | 'streaming'
-  | 'complete';
+export type FileDetectionStage = 'file_detected' | 'waiting_for_content' | 'content_extracted' | 'request_started' | 'complete';
 
 export interface PageContext {
   repoOwner: string;
@@ -22,15 +16,23 @@ export interface PageContext {
   page: PageKind;
   filePath?: string;
   fileRef?: string;
+  /** Read locally from the page/raw file to know when the file is ready and to detect
+   * changes for cache invalidation. Never sent to the GitGuide server. */
   fileContent?: string;
   issueNumber?: number;
+  /** Read locally from the page for readiness and change detection; never sent. */
   issueTitle?: string;
   issueBody?: string;
   issueComments?: string;
 }
 
-export interface RelevantFile {
+export interface CheckedPath {
   path: string;
+  /** Exists in the repository at the analyzed commit. */
+  verified: boolean;
+}
+
+export interface RelevantFile extends CheckedPath {
   reason: string;
 }
 
@@ -42,7 +44,8 @@ export interface ArchitectureItem {
 export interface EntrypointItem {
   path: string;
   label: string;
-  loc: number;
+  loc: number | null;
+  url?: string;
 }
 
 export interface FolderItem {
@@ -58,6 +61,16 @@ export interface GoodFirstIssueItem {
   comments: number;
 }
 
+export interface RepoMeta {
+  ref: string;
+  commitSha: string;
+  filesInTree: number;
+  filesShownToModel: number;
+  treeTruncated: boolean;
+  readmeTruncated: boolean;
+  hasReadme: boolean;
+}
+
 export interface ExplainRepoResult {
   purpose: string;
   techStack: string[];
@@ -68,12 +81,26 @@ export interface ExplainRepoResult {
   authPersistence: string;
   howToRun: string[];
   beginnerStart: string;
-  goodFirstIssues: GoodFirstIssueItem[];
+  /** null when the lookup failed (see goodFirstIssuesError) — not the same as "none". */
+  goodFirstIssues: GoodFirstIssueItem[] | null;
+  goodFirstIssuesError: string | null;
+  meta?: RepoMeta;
 }
 
 export interface ExplainFileQuickResult {
   purpose: string;
   summary: string;
+}
+
+export interface FileMeta {
+  ref: string;
+  commitSha: string;
+  path: string;
+  url?: string;
+  lines: number;
+  totalChars: number;
+  analyzedChars: number;
+  truncated: boolean;
 }
 
 export interface ExplainFileResult {
@@ -87,7 +114,19 @@ export interface ExplainFileResult {
   importantLogic: string;
   edgeCases: string;
   contributorNotes: string;
-  relatedFiles: string[];
+  relatedFiles: CheckedPath[];
+  meta?: FileMeta;
+}
+
+export interface IssueMeta {
+  issueNumber: number;
+  title: string;
+  state: string;
+  updatedAt: string;
+  commentsTotal: number;
+  commentsIncluded: number;
+  commitSha: string;
+  ref: string;
 }
 
 export interface AnalysisResult {
@@ -102,6 +141,7 @@ export interface AnalysisResult {
   testingConsiderations: string;
   difficulty: Difficulty;
   timeEstimate: string;
+  meta?: IssueMeta;
 }
 
 export interface Citation {
@@ -111,11 +151,29 @@ export interface Citation {
   url: string;
 }
 
+export interface IndexInfo {
+  status: 'partial' | 'background-indexing' | 'complete' | 'failed';
+  ref: string;
+  commitSha: string;
+  fullCoverage: boolean;
+  retrieval: 'lexical' | 'hybrid';
+  indexedFiles: number;
+  eligibleFiles: number;
+  treeTruncated: boolean;
+}
+
+export type ChatMessageStatus = 'streaming' | 'complete' | 'stopped' | 'interrupted' | 'error';
+
 export interface ChatMessage {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** Assistant messages only. Undefined for messages saved by older versions. */
+  status?: ChatMessageStatus;
   citations?: Citation[];
-  indexingStatus?: 'partial' | 'complete';
+  index?: IndexInfo;
+  error?: { code: string; message: string };
+  finishReason?: string | null;
 }
 
 export function repoKeyOf(repoOwner: string, repoName: string): string {
@@ -125,35 +183,44 @@ export function repoKeyOf(repoOwner: string, repoName: string): string {
 interface Store {
   isOpen: boolean;
   view: PanelView;
+  /** Where to return after the settings screen. */
+  previousView: PanelView;
   pageContext: PageContext | null;
   activeAction: CardType | null;
   pendingIssueNumber: number | null;
 
   repoResult: ExplainRepoResult | null;
+  repoResultTarget: string | null;
   repoLoading: boolean;
-  repoError: string | null;
+  repoError: UiError | null;
 
   fileResult: ExplainFileResult | null;
+  fileResultTarget: string | null;
   fileQuickResult: ExplainFileQuickResult | null;
   fileLoading: boolean;
-  fileError: string | null;
+  fileError: UiError | null;
   fileStage: FileDetectionStage | null;
   // performance.now() timestamp of the navigation that triggered the current file
-  // detection — lets later stages (e.g. the explain-file request) log a timing delta
-  // relative to when the user actually opened the file, not when they were called.
+  // detection, for dev timing logs.
   fileNavStartedAt: number | null;
 
   issueResult: AnalysisResult | null;
+  issueResultTarget: string | null;
   issueLoading: boolean;
-  issueError: string | null;
+  issueError: UiError | null;
 
   goodFirstIssuesResult: GoodFirstIssueItem[] | null;
+  goodFirstIssuesResultTarget: string | null;
   goodFirstIssuesLoading: boolean;
-  goodFirstIssuesError: string | null;
+  goodFirstIssuesError: UiError | null;
 
+  /** Repository the in-memory conversation belongs to. */
+  chatConversationKey: string | null;
+  chatHydrated: boolean;
   chatMessages: ChatMessage[];
   chatInput: string;
   chatStreaming: boolean;
+  chatStorageWarning: string | null;
 
   setOpen: (open: boolean) => void;
   setView: (view: PanelView) => void;
@@ -161,68 +228,59 @@ interface Store {
   setActiveAction: (action: CardType | null) => void;
   setPendingIssueNumber: (n: number | null) => void;
 
-  setRepoResult: (r: ExplainRepoResult | null) => void;
-  setRepoLoading: (b: boolean) => void;
-  setRepoError: (e: string | null) => void;
-
-  setFileResult: (r: ExplainFileResult | null) => void;
-  setFileQuickResult: (r: ExplainFileQuickResult | null) => void;
-  setFileLoading: (b: boolean) => void;
-  setFileError: (e: string | null) => void;
   setFileStage: (s: FileDetectionStage | null) => void;
   setFileNavStartedAt: (t: number | null) => void;
-
-  setIssueResult: (r: AnalysisResult | null) => void;
-  setIssueLoading: (b: boolean) => void;
-  setIssueError: (e: string | null) => void;
-
-  setGoodFirstIssuesResult: (r: GoodFirstIssueItem[] | null) => void;
-  setGoodFirstIssuesLoading: (b: boolean) => void;
-  setGoodFirstIssuesError: (e: string | null) => void;
-
-  resetResults: () => void;
-
-  addChatMessage: (msg: ChatMessage) => void;
-  appendToLastChatMessage: (content: string) => void;
-  setLastChatMessageCitations: (citations: Citation[]) => void;
-  setLastChatMessageIndexingStatus: (status: 'partial' | 'complete') => void;
-  setChatMessages: (messages: ChatMessage[]) => void;
   setChatInput: (input: string) => void;
-  setChatStreaming: (streaming: boolean) => void;
-  resetChat: () => void;
+
+  /** Drops every result/error/loading flag (repository changed). */
+  resetResults: () => void;
+  /** Drops the file explanation (different file or ref in the same repository). */
+  resetFileResult: () => void;
+  /** Drops the issue analysis (different issue in the same repository). */
+  resetIssueResult: () => void;
 
   goToQuickActions: () => void;
 }
 
-export const useStore = create<Store>((set) => ({
-  isOpen: false,
-  view: 'empty',
-  pageContext: null,
+const emptyResults = {
   activeAction: null,
   pendingIssueNumber: null,
-
   repoResult: null,
+  repoResultTarget: null,
   repoLoading: false,
   repoError: null,
-
   fileResult: null,
+  fileResultTarget: null,
   fileQuickResult: null,
   fileLoading: false,
   fileError: null,
   fileStage: null,
   fileNavStartedAt: null,
-
   issueResult: null,
+  issueResultTarget: null,
   issueLoading: false,
   issueError: null,
-
   goodFirstIssuesResult: null,
+  goodFirstIssuesResultTarget: null,
   goodFirstIssuesLoading: false,
   goodFirstIssuesError: null,
+} as const;
 
+export const useStore = create<Store>((set) => ({
+  isOpen: false,
+  view: 'empty',
+  previousView: 'home',
+  pageContext: null,
+
+
+  ...emptyResults,
+
+  chatConversationKey: null,
+  chatHydrated: false,
   chatMessages: [],
   chatInput: '',
   chatStreaming: false,
+  chatStorageWarning: null,
 
   setOpen: (open) => set({ isOpen: open }),
   setView: (view) => set({ view }),
@@ -230,83 +288,13 @@ export const useStore = create<Store>((set) => ({
   setActiveAction: (activeAction) => set({ activeAction }),
   setPendingIssueNumber: (pendingIssueNumber) => set({ pendingIssueNumber }),
 
-  setRepoResult: (repoResult) => set({ repoResult }),
-  setRepoLoading: (repoLoading) => set({ repoLoading }),
-  setRepoError: (repoError) => set({ repoError }),
-
-  setFileResult: (fileResult) => set({ fileResult }),
-  setFileQuickResult: (fileQuickResult) => set({ fileQuickResult }),
-  setFileLoading: (fileLoading) => set({ fileLoading }),
-  setFileError: (fileError) => set({ fileError }),
   setFileStage: (fileStage) => set({ fileStage }),
   setFileNavStartedAt: (fileNavStartedAt) => set({ fileNavStartedAt }),
-
-  setIssueResult: (issueResult) => set({ issueResult }),
-  setIssueLoading: (issueLoading) => set({ issueLoading }),
-  setIssueError: (issueError) => set({ issueError }),
-
-  setGoodFirstIssuesResult: (goodFirstIssuesResult) => set({ goodFirstIssuesResult }),
-  setGoodFirstIssuesLoading: (goodFirstIssuesLoading) => set({ goodFirstIssuesLoading }),
-  setGoodFirstIssuesError: (goodFirstIssuesError) => set({ goodFirstIssuesError }),
-
-  resetResults: () =>
-    set({
-      activeAction: null,
-      pendingIssueNumber: null,
-      repoResult: null,
-      repoLoading: false,
-      repoError: null,
-      fileResult: null,
-      fileQuickResult: null,
-      fileLoading: false,
-      fileError: null,
-      fileStage: null,
-      fileNavStartedAt: null,
-      issueResult: null,
-      issueLoading: false,
-      issueError: null,
-      goodFirstIssuesResult: null,
-      goodFirstIssuesLoading: false,
-      goodFirstIssuesError: null,
-    }),
-
-  addChatMessage: (msg) => set((s) => ({ chatMessages: [...s.chatMessages, msg] })),
-
-  appendToLastChatMessage: (content) =>
-    set((s) => {
-      const chatMessages = [...s.chatMessages];
-      const last = chatMessages[chatMessages.length - 1];
-      if (last?.role === 'assistant') {
-        chatMessages[chatMessages.length - 1] = { ...last, content: last.content + content };
-      }
-      return { chatMessages };
-    }),
-
-  setLastChatMessageCitations: (citations) =>
-    set((s) => {
-      const chatMessages = [...s.chatMessages];
-      const last = chatMessages[chatMessages.length - 1];
-      if (last?.role === 'assistant') {
-        chatMessages[chatMessages.length - 1] = { ...last, citations };
-      }
-      return { chatMessages };
-    }),
-
-  setLastChatMessageIndexingStatus: (indexingStatus) =>
-    set((s) => {
-      const chatMessages = [...s.chatMessages];
-      const last = chatMessages[chatMessages.length - 1];
-      if (last?.role === 'assistant') {
-        chatMessages[chatMessages.length - 1] = { ...last, indexingStatus };
-      }
-      return { chatMessages };
-    }),
-
-  setChatMessages: (chatMessages) => set({ chatMessages }),
   setChatInput: (chatInput) => set({ chatInput }),
-  setChatStreaming: (chatStreaming) => set({ chatStreaming }),
 
-  resetChat: () => set({ chatMessages: [], chatInput: '', chatStreaming: false }),
+  resetResults: () => set({ ...emptyResults }),
+  resetFileResult: () => set({ fileResult: null, fileResultTarget: null, fileQuickResult: null, fileError: null, fileLoading: false }),
+  resetIssueResult: () => set({ issueResult: null, issueResultTarget: null, issueError: null, issueLoading: false }),
 
   goToQuickActions: () => set({ view: 'home', activeAction: null }),
 }));

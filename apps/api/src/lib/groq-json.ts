@@ -22,7 +22,7 @@ export class GroqResponseError extends Error {
  * instead of failing the request — `GroqResponseError` is only thrown when the
  * response isn't usable at all (not valid JSON, or not even an object).
  */
-export function parseJsonCompletion<T>(raw: string, schema?: ZodType<T>): T {
+export function parseJsonCompletion<T>(raw: string, schema?: ZodType<T>, options: { required?: (keyof T)[] } = {}): T {
   const json = raw
     .replace(/^```(?:json)?\s*/m, '')
     .replace(/\s*```\s*$/m, '')
@@ -40,6 +40,13 @@ export function parseJsonCompletion<T>(raw: string, schema?: ZodType<T>): T {
   const result = schema.safeParse(parsed);
   if (!result.success) {
     throw new GroqResponseError('Model response did not match the expected shape');
+  }
+  // Field-level .catch() fallbacks would otherwise turn a reply like `{}` into an
+  // all-empty "successful" result. The core fields must carry real content.
+  for (const key of options.required ?? []) {
+    const value = (result.data as Record<string, unknown>)[key as string];
+    const isEmpty = value == null || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0);
+    if (isEmpty) throw new GroqResponseError(`Model response was missing "${String(key)}"`);
   }
   return result.data;
 }
