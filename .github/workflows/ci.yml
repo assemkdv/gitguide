@@ -5,10 +5,20 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    name: Lint, typecheck, test, build
+    name: Lint, typecheck, test, build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must satisfy the root package.json "engines" (>=22.13), which is the strictest
+        # requirement among the dependencies (eslint 10, jsdom 29). 22 is what .nvmrc and
+        # the Render deployment use; 24 is the current LTS.
+        node: ['22', '24']
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,9 +26,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # README documents "Node 18+" as the minimum this project needs; no .nvmrc or
-          # engines field exists to read from, so this is the single source of truth.
-          node-version: '20'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
@@ -27,21 +35,57 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # apps/api's own "build" script is `tsc` (no separate noEmit typecheck script
-      # exists) — for this workspace that one command both typechecks and produces the
-      # production build, so it stands in for both, rather than running tsc twice.
+      # apps/api's "build" script is `tsc`: it both typechecks and produces dist/.
       - name: Build & typecheck API
-        run: npm run build --workspace=apps/api
+        run: npm run build:api
 
-      # apps/extension's "build" script is `vite build`, which transpiles per-file via
-      # esbuild and does not type-check across the project — this is the only step that
-      # actually catches a type error there, so it has to run as its own step rather
-      # than being folded into the build below.
+      # `vite build` doesn't type-check, so the extension needs its own tsc pass.
       - name: Typecheck extension
         run: npx tsc --noEmit -p apps/extension
 
       - name: Test
         run: npm test
 
-      - name: Build extension
-        run: npm run build:extension
+      # Builds the release extension and runs the packaging checks (MV3, https-only API
+      # host permission, no source maps, no localhost URLs, no secrets) and the ZIP.
+      - name: Build & verify release package
+        run: npm run package:extension
+
+      - name: Upload release candidate
+        if: matrix.node == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitguide-extension
+          path: release/
+          retention-days: 14
+
+  e2e:
+    name: Browser tests (built extension in Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Fixture GitHub pages + a local mock API; no network access to GitHub or Groq.
+      - name: Run browser tests
+        run: npm run test:e2e
+
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7

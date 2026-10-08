@@ -1,0 +1,38 @@
+# Render Blueprint for the GitGuide API. Applying it is a manual step in the Render
+# dashboard (New → Blueprint, or "Sync" on an existing Blueprint); nothing here deploys
+# by itself. See docs/DEPLOYMENT.md before applying it to an existing service.
+services:
+  - type: web
+    name: gitguide-api
+    runtime: node
+    plan: free
+    region: oregon
+    # Dev dependencies are needed to compile TypeScript; NODE_ENV=production would
+    # otherwise make npm skip them.
+    buildCommand: npm ci --include=dev && npm run build:api
+    startCommand: node apps/api/dist/index.js
+    # /ready returns 503 while the instance drains for shutdown, so deploys switch over
+    # only to an instance that is actually serving.
+    healthCheckPath: /ready
+    # Deploy only commits whose CI checks passed (lint, typecheck, tests, builds).
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ALLOWED_EXTENSION_IDS
+        sync: false
+      # Verify against the `xff` field of the request logs; see docs/DEPLOYMENT.md.
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: ENABLE_LOCAL_EMBEDDINGS
+        value: "false"
+      - key: MAX_CONCURRENT_AI_REQUESTS
+        value: "6"
+      - key: DAILY_AI_REQUEST_BUDGET
+        value: "3000"
