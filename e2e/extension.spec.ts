@@ -109,6 +109,15 @@ test.describe('GitGuide extension in Chromium', () => {
     // Revisits are served from the local cache.
     expect(api.requestsTo('/v1/explain-file').length).toBe(2);
 
+    // A full reload reads b.ts fresh from the server-rendered page, so it hits the cache
+    // only if the in-page visit stored b.ts under b.ts's own content (not the previous
+    // file's, which is still on screen right after an in-place navigation).
+    await page.reload();
+    await openPanel(page);
+    await runQuickAction(page, 'Explain File');
+    await expect(panel(page)).toContainText('Explains repo:src/b.ts@main');
+    expect(api.requestsTo('/v1/explain-file').length).toBe(2);
+
     await spaClick(page, 'go-auth-dev');
     await expect(panel(page)).toContainText('Explains repo:src/auth.ts@dev');
     expect(api.requestsTo('/v1/explain-file').at(-1)?.body.ref).toBe('dev');

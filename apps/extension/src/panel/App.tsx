@@ -234,7 +234,11 @@ export default function App() {
       resetFileResult();
     }
 
-    startFileDetection(fileRoute, navStart);
+    startFileDetection(fileRoute, navStart, {
+      // No previous context means the panel just mounted on a freshly loaded page.
+      inPlaceNavigation: prev !== null,
+      previousContent: prev?.page === 'file' ? prev.fileContent : undefined,
+    });
   };
 
   const updatePageContext = () => {

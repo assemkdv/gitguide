@@ -109,3 +109,69 @@ describe('isSameFileRoute', () => {
     expect(isSameFileRoute(prevRepo, routeFor('src/auth.ts'))).toBe(false);
   });
 });
+
+describe('file-detection never attributes the previous page’s DOM to the new file', () => {
+  const A = 'export function login() {\n  return checkPassword();\n}\n';
+  const B = 'export function other() {\n  return 42; // file b\n}\n';
+  // Repaints inside the existing content container, as GitHub's SPA does.
+  const paint = (content: string) => {
+    const main = document.querySelector('main') ?? document.body.appendChild(document.createElement('main'));
+    main.innerHTML = `<div data-testid="ai-code-viewer"><pre>${content}</pre></div>`;
+  };
+  const flushObserver = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    document.body.innerHTML = '<main></main>';
+    useStore.setState(useStore.getInitialState());
+    vi.mocked(fetchRawFileContent).mockReset();
+    vi.mocked(fetchRawFileContent).mockResolvedValue(null);
+    cancelFileDetection();
+  });
+
+  it('uses already-rendered content on a fresh page load', () => {
+    paint(A);
+    useStore.setState({ pageContext: { repoOwner: 'owner', repoName: 'repo', page: 'file', filePath: 'a.ts', fileContent: '' } });
+    startFileDetection(routeFor('a.ts'), performance.now(), { inPlaceNavigation: false });
+
+    expect(useStore.getState().pageContext?.fileContent).toBe(A);
+  });
+
+  it('after an in-place navigation, ignores the old file still on screen and waits for the repaint', async () => {
+    paint(A);
+    useStore.setState({ pageContext: { repoOwner: 'owner', repoName: 'repo', page: 'file', filePath: 'b.ts', fileContent: '' } });
+    startFileDetection(routeFor('b.ts'), performance.now(), { inPlaceNavigation: true, previousContent: A });
+
+    expect(useStore.getState().pageContext?.fileContent).toBe('');
+    document.body.appendChild(document.createElement('span')); // unrelated mutation mid-transition
+    await flushObserver();
+    expect(useStore.getState().pageContext?.fileContent).toBe('');
+
+    paint(B);
+    await flushObserver();
+    expect(useStore.getState().pageContext?.fileContent).toBe(B);
+  });
+
+  it('rejects the previous file’s content even when it is painted after navigation started', async () => {
+    // The previous page is still loading: nothing painted yet.
+    useStore.setState({ pageContext: { repoOwner: 'owner', repoName: 'repo', page: 'file', filePath: 'b.ts', fileContent: '' } });
+    startFileDetection(routeFor('b.ts'), performance.now(), { inPlaceNavigation: true, previousContent: A });
+
+    paint(A); // the previous navigation's late repaint
+    await flushObserver();
+    expect(useStore.getState().pageContext?.fileContent).toBe('');
+
+    paint(B);
+    await flushObserver();
+    expect(useStore.getState().pageContext?.fileContent).toBe(B);
+  });
+
+  it('a raw fetch for the new file still wins while the old DOM is on screen', async () => {
+    paint(A);
+    vi.mocked(fetchRawFileContent).mockResolvedValueOnce(B);
+    useStore.setState({ pageContext: { repoOwner: 'owner', repoName: 'repo', page: 'file', filePath: 'b.ts', fileContent: '' } });
+    startFileDetection(routeFor('b.ts'), performance.now(), { inPlaceNavigation: true, previousContent: A });
+
+    await flushObserver();
+    expect(useStore.getState().pageContext?.fileContent).toBe(B);
+  });
+});
