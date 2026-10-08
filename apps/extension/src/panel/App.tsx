@@ -4,12 +4,12 @@ import { EmptyState } from './components/EmptyState';
 import { HomeView } from './components/HomeView';
 import { ResultPage } from './components/ResultPage';
 import { AskGitGuidePage } from './components/AskGitGuidePage';
-import { DataNotice, SettingsView } from './components/DataNotice';
+import { SettingsView } from './components/DataNotice';
 import { MARKDOWN_CSS } from './components/Markdown';
 import { parseGitHubPage } from '../content/page-parser';
 import { parseFileRouteFromUrl, startFileDetection, cancelFileDetection, isSameFileRoute } from './file-detection';
 import { devLog } from './dev-log';
-import { pruneExpiredCache, loadConsent, loadPanelWidth, savePanelWidth, sanitizePanelWidth, DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH } from './storage';
+import { pruneExpiredCache, loadPanelWidth, savePanelWidth, sanitizePanelWidth, DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH } from './storage';
 import { hydrateChat } from './chat';
 import { openSettings } from './actions';
 
@@ -31,9 +31,9 @@ const LEGACY_WIDTH_KEY = 'gitguide-panel-width';
 const OVERLAY_BREAKPOINT = 760;
 
 /** After a repository change, views tied to the old page go back to Quick Actions;
- * the consent and settings screens stay where they are. */
+ * the settings screen stays where it is. */
 function viewAfterRepoChange(view: PanelView): PanelView {
-  return view === 'consent' || view === 'settings' ? view : 'home';
+  return view === 'settings' ? view : 'home';
 }
 
 function LogoGlyph({ size = 14, color = C.accentText }: { size?: number; color?: string }) {
@@ -104,7 +104,6 @@ export default function App() {
         void savePanelWidth(migrated);
       }
     });
-    void loadConsent().then((accepted) => useStore.setState({ consentAccepted: accepted, consentLoaded: true }));
     const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -613,7 +612,6 @@ export default function App() {
           {view === 'result' && <ResultPage />}
           {view === 'chat' && <AskGitGuidePage />}
           {view === 'empty' && <EmptyState />}
-          {view === 'consent' && <DataNotice />}
           {view === 'settings' && <SettingsView />}
         </div>
       </div>

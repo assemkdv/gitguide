@@ -120,10 +120,6 @@ interface RunSpec {
 
 function run(spec: RunSpec): Promise<void> {
   const { kind, ctx, force } = spec;
-  const state = useStore.getState();
-  // Defense in depth: the UI routes users through the data notice first.
-  if (!state.consentAccepted) return Promise.resolve();
-
   const target = targetOf(kind, ctx);
   if (!target || target !== currentTarget(kind)) return Promise.resolve();
 

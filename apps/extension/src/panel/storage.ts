@@ -4,7 +4,7 @@ import { isObject, normalizeChatMessage } from './validate';
 // Everything GitGuide keeps lives in chrome.storage.local on this device:
 //   cache:v2:*   cached explanations (expire; refreshable)
 //   chat:v2:*    Ask GitGuide conversations, per repository (until the user clears them)
-//   settings:*   data-notice acknowledgement and panel width
+//   settings:*   panel width
 // Reads are validated (data may be from an older version or a partial write) and writes
 // never throw: a full storage quota must not lose an answer the user is looking at.
 
@@ -14,9 +14,9 @@ const CACHE_PREFIX = 'cache:v2:';
 const LEGACY_CACHE_PREFIX = 'cache:';
 const CHAT_PREFIX = 'chat:v2:';
 const LEGACY_CHAT_PREFIX = 'chat:';
-const SETTINGS_CONSENT = 'settings:dataNotice';
+/** Acknowledgement of the old blocking data notice; no longer used, removed on prune. */
+const LEGACY_SETTINGS_CONSENT = 'settings:dataNotice';
 const SETTINGS_WIDTH = 'settings:panelWidth';
-export const CONSENT_VERSION = 1;
 export const MAX_STORED_MESSAGES = 60;
 
 interface CacheEntry<T> {
@@ -118,6 +118,7 @@ export async function pruneExpiredCache(): Promise<void> {
       return !isObject(value) || typeof value.expiresAt !== 'number' || now > value.expiresAt;
     })
     .map(([key]) => key);
+  if (LEGACY_SETTINGS_CONSENT in all) stale.push(LEGACY_SETTINGS_CONSENT);
   await storageRemove(stale);
 }
 
@@ -181,15 +182,6 @@ export async function clearAllHistoryAndCaches(): Promise<boolean> {
 // ---------------------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------------------
-
-export async function loadConsent(): Promise<boolean> {
-  const value = (await storageGet(SETTINGS_CONSENT))[SETTINGS_CONSENT];
-  return isObject(value) && value.version === CONSENT_VERSION;
-}
-
-export function saveConsent(): Promise<boolean> {
-  return storageSet({ [SETTINGS_CONSENT]: { version: CONSENT_VERSION, acceptedAt: Date.now() } });
-}
 
 export const MIN_PANEL_WIDTH = 320;
 export const MAX_PANEL_WIDTH = 650;

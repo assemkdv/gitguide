@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { UiError } from './api-client';
 
 export type { UiError };
-export type PanelView = 'home' | 'result' | 'chat' | 'empty' | 'consent' | 'settings';
+export type PanelView = 'home' | 'result' | 'chat' | 'empty' | 'settings';
 export type PageKind = 'repo' | 'file' | 'issue';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 export type CardType = 'repo' | 'file' | 'issue' | 'good-first-issues';
@@ -183,16 +183,11 @@ export function repoKeyOf(repoOwner: string, repoName: string): string {
 interface Store {
   isOpen: boolean;
   view: PanelView;
-  /** Where to return after the consent or settings screen. */
+  /** Where to return after the settings screen. */
   previousView: PanelView;
   pageContext: PageContext | null;
   activeAction: CardType | null;
   pendingIssueNumber: number | null;
-
-  consentAccepted: boolean;
-  consentLoaded: boolean;
-  /** An action the user chose before accepting the data notice; run after accepting. */
-  pendingConsentAction: CardType | 'chat' | null;
 
   repoResult: ExplainRepoResult | null;
   repoResultTarget: string | null;
@@ -277,9 +272,6 @@ export const useStore = create<Store>((set) => ({
   previousView: 'home',
   pageContext: null,
 
-  consentAccepted: false,
-  consentLoaded: false,
-  pendingConsentAction: null,
 
   ...emptyResults,
 

@@ -11,7 +11,7 @@ import { modelOptions } from '../lib/ai-models';
 import { sendError } from '../lib/errors';
 import { requestSignal } from '../lib/request-signal';
 import { resolveRepoPath } from '../lib/path-evidence';
-import { untrusted, UNTRUSTED_DATA_RULES } from '../lib/prompt-safety';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
 import { tokenize } from '../lib/bm25';
 import { sampleTree } from '../lib/repo-summary';
 import { isIndexableFile } from '../lib/ignore-list';
@@ -57,13 +57,15 @@ analyzeRouter.post('/', validateBody(analyzeSchema), async (req: Request, res: R
 
     const system = `You are a senior software engineer helping a contributor understand a GitHub issue before starting work.
 
+${OUTPUT_STYLE_RULES}
+
 ${UNTRUSTED_DATA_RULES}
 - The candidate file list is real (from the repository at commit ${snapshot.commitSha.slice(0, 7)}), but you have NOT seen the contents of those files. Treat file choices and implementation steps as suggestions, and prefer the issue's own wording over speculation.
 
 Respond with ONLY valid JSON. No markdown, no code fences, no extra text.`;
 
     const user = `Repository: ${repoOwner}/${repoName}
-Issue #${issue.number} (${issue.state})${issue.isPullRequest ? ' — this is a pull request' : ''}
+Issue #${issue.number} (${issue.state})${issue.isPullRequest ? ' (this is a pull request)' : ''}
 
 ${untrusted('issue', `Title: ${issue.title}\n\n${issue.body || 'No description provided.'}`)}
 

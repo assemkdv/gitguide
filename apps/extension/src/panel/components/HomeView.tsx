@@ -3,6 +3,7 @@ import { useStore, CardType } from '../store';
 import { requestAction } from '../actions';
 import { BookIcon, CodeIcon, MessageIcon, BranchIcon } from './cards';
 import { sectionLabel, SC as C } from './shared';
+import { DataDisclosure } from './DataNotice';
 
 interface ActionSpec {
   key: CardType;
@@ -94,6 +95,10 @@ export function HomeView() {
         ))}
       </div>
 
+      <div style={{ padding: '6px 16px 0' }}>
+        <DataDisclosure />
+      </div>
+
       <div style={{ padding: '12px 16px 0' }}>
         <span style={sectionLabel}>Chat</span>
       </div>
@@ -141,10 +146,6 @@ export function HomeView() {
           </div>
         </button>
       </div>
-
-      <p style={{ margin: 'auto 16px 14px', fontSize: 10.5, color: C.mutedDim, lineHeight: 1.5 }}>
-        Public repositories only. AI answers can be wrong — check the linked sources.
-      </p>
     </div>
   );
 }

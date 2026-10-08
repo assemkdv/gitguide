@@ -21,10 +21,10 @@ deployed API, Groq, and the packaged build.
 
 - [ ] On https://github.com/sindresorhus/slugify, the launcher button appears bottom-right;
       the panel opens and closes (button, ×, Escape); focus returns to the launcher.
-- [ ] First Quick Action shows "Before GitGuide sends anything". "Not now" sends nothing
-      (DevTools → service worker → Network is empty).
-- [ ] "I understand, continue" runs the action. Reloading the page does not show the
-      notice again.
+- [ ] Quick Actions shows the short note on where data goes, with a Privacy & data
+      link. Opening the panel sends nothing (DevTools → service worker → Network is empty).
+- [ ] The first Quick Action runs immediately, with no confirmation step.
+- [ ] No em dashes appear in panel text (labels, notes, errors).
 - [ ] On a private repository you can access (signed in), any action shows the
       public-only message and the service worker's Network tab shows no request.
 - [ ] Privacy & data (shield icon) → Clear… → Delete removes conversations

@@ -4,6 +4,7 @@ import { useStore } from './store';
 import type { PageContext } from './store';
 import { runExplainRepo, runExplainFile, runSummarizeIssue, runGoodFirstIssues, abortAllRequests, targetOf } from './runActions';
 import { cacheKeys, fingerprint } from './storage';
+import { requestAction } from './actions';
 
 const SHA = 'a'.repeat(40);
 
@@ -49,7 +50,6 @@ beforeEach(() => {
   vi.unstubAllGlobals();
   chrome = installChromeMock();
   useStore.setState(useStore.getInitialState());
-  useStore.setState({ consentAccepted: true });
   document.head.innerHTML = '';
 });
 
@@ -311,12 +311,14 @@ describe('errors and policy', () => {
     expect(useStore.getState().repoError?.code).toBe('PRIVATE_REPO_UNSUPPORTED');
   });
 
-  it('sends nothing before the data notice is acknowledged', async () => {
-    useStore.setState({ consentAccepted: false });
+  it('runs a Quick Action on first use, with no acknowledgement step in between', async () => {
     const f = controllableFetch();
     navigate(repoA);
-    await runExplainRepo(repoA);
-    expect(f.fn).not.toHaveBeenCalled();
+    requestAction('repo');
+    await flush();
+    expect(useStore.getState().view).toBe('result');
+    expect(f.full()).toHaveLength(1);
+    expect(f.full()[0].body).toEqual({ repoOwner: 'owner', repoName: 'repoA' });
   });
 
   it('keeps a successful answer even when saving it to storage fails (quota)', async () => {

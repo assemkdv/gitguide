@@ -34,14 +34,13 @@ describe('result resets', () => {
     expect(s.repoLoading || s.fileLoading).toBe(false);
   });
 
-  it('does not touch page context, chat, or consent', () => {
+  it('does not touch page context or chat', () => {
     const pageContext = { repoOwner: 'o', repoName: 'r', page: 'repo' as const };
-    useStore.setState({ pageContext, chatMessages: [{ id: '1', role: 'user', content: 'hi' }], consentAccepted: true });
+    useStore.setState({ pageContext, chatMessages: [{ id: '1', role: 'user', content: 'hi' }] });
     useStore.getState().resetResults();
     const s = useStore.getState();
     expect(s.pageContext).toBe(pageContext);
     expect(s.chatMessages).toHaveLength(1);
-    expect(s.consentAccepted).toBe(true);
   });
 
   it('resetFileResult and resetIssueResult only clear their own action', () => {

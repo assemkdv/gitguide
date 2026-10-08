@@ -41,20 +41,19 @@ async function shot(name) {
   console.log(`✓ ${name}`);
 }
 
-// ONLY=notice captures just the data notice (no API needed), e.g. from a build carrying the
-// production API URL so the screenshot names the real server.
+// ONLY=home captures just Quick Actions with the data disclosure (no API needed), e.g. from
+// a build carrying the production API URL.
 const only = process.env.ONLY;
 
 try {
-  // 1. Data notice shown before anything is sent.
+  // 1. Quick Actions, with the short disclosure of where data goes.
   await open('https://github.com/sindresorhus/slugify');
-  await panel.getByRole('button', { name: /Explain Repository/ }).click();
-  await panel.getByRole('heading', { name: 'Before GitGuide sends anything' }).waitFor();
-  await shot('1-data-notice.png');
-  if (only === 'notice') throw new Error('done');
+  await panel.getByText('Public repositories only.').waitFor();
+  await shot('1-quick-actions.png');
+  if (only === 'home') throw new Error('done');
 
   // 2. Repository overview.
-  await panel.getByRole('button', { name: 'I understand, continue' }).click();
+  await panel.getByRole('button', { name: /Explain Repository/ }).click();
   await panel.getByText(/Based on main @/).waitFor({ timeout: 90_000 });
   await shot('2-explain-repository.png');
 

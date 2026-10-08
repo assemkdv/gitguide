@@ -51,7 +51,12 @@ vulnerabilities at the time; after `npm audit fix` later in the session, see §5
   links only, no remote images, copy buttons on code).
 - No way to refresh a cached explanation or to notice changed content → Refresh button;
   cache entries carry a local content fingerprint and are ignored when content changed.
-- No data notice or clear-data control → first-use notice and Privacy & data screen.
+- No data disclosure or clear-data control → a short, non-blocking note under Quick
+  Actions and a Privacy & data screen with the clear control. (The first version used a
+  blocking first-use notice; it was replaced during review so actions run immediately.)
+- Panel copy: no generic AI disclaimer in the footer (citations, coverage notes, and
+  specific errors carry that information); no em dashes in UI text, and every AI prompt
+  asks the model not to use them (`OUTPUT_STYLE_RULES` in `lib/prompt-safety.ts`).
 - Accessibility: ARIA roles/labels on the panel, live regions, focus moves into the panel
   and back to the launcher, keyboard resize handle, reduced-motion support.
 
@@ -71,8 +76,8 @@ vulnerabilities at the time; after `npm audit fix` later in the session, see §5
 | Suite | Result |
 |---|---|
 | `npm ci`, `npm run lint`, API build, extension `tsc`, `npm run build:extension` | pass |
-| API unit/integration (Vitest) | **292 passed** (22 files) |
-| Extension unit/integration (Vitest) | **133 passed** (12 files) |
+| API unit/integration (Vitest) | **294 passed** (22 files) |
+| Extension unit/integration (Vitest) | **136 passed** (12 files) |
 | Browser: built MV3 extension in Playwright Chromium 156 (fixture GitHub + mock API) | **13 passed**, 2 consecutive clean runs. CI on PR #1 then failed one test intermittently (defect 21); after the fix, that test passed 5 consecutive repeated runs locally and fails 3/3 on the original code |
 | Release packaging checks (`scripts/package-extension.mjs`) | pass; ZIP checksum identical across rebuilds |
 | Original-code reproductions (worktree of `9779a7e`) | 5 navigation races, Enter-to-send, NaN width, EOF-as-done: all reproduced |
@@ -130,7 +135,7 @@ server check); a GitHub-token-authenticated run.
   settings, width sanitizing.
 - `content/keyboard-guard.ts`: isolates panel keystrokes from GitHub without breaking
   the panel's own keys.
-- UI: data notice and Privacy & data screen (`DataNotice.tsx`), Markdown renderer,
+- UI: Quick Actions data note and Privacy & data screen (`DataNotice.tsx`), Markdown renderer,
   provenance/coverage notes, Refresh, verified-path tags, accessibility.
 
 **Build, release, CI**

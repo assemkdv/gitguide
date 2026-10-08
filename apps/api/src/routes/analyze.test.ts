@@ -9,6 +9,7 @@ import { getGroqClient } from '../lib/groq-client';
 import { ApiError } from '../lib/errors';
 import { app } from '../server';
 import { candidatePathsForIssue } from './analyze';
+import { OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
 
 const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 
@@ -58,6 +59,10 @@ describe('POST /v1/analyze', () => {
     expect(user.match(/<\/issue>/g)).toHaveLength(1);
     expect(user).toContain('<comment>');
     expect(user).not.toMatch(/EXACTLY 3/);
+    const prompt = create.mock.calls[0][0].messages.map((m: { content: string }) => m.content).join('\n');
+    expect(prompt).toContain(OUTPUT_STYLE_RULES);
+    // The style rule itself names the character; nothing else in the template uses it.
+    expect(prompt.replace(OUTPUT_STYLE_RULES, '')).not.toContain('\u2014');
   });
 
   it('maps a missing issue to ISSUE_NOT_FOUND', async () => {

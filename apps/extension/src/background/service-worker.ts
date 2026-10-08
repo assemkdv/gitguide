@@ -119,7 +119,7 @@ export async function streamSse(port: chrome.runtime.Port, apiPath: string, body
     send({
       type: 'error',
       code: 'API_UNREACHABLE',
-      message: "Couldn't reach the GitGuide server. Check your connection — if the server was idle it can take up to a minute to start.",
+      message: "Couldn't reach the GitGuide server. Check your connection. If the server was idle, it can take up to a minute to start.",
     });
   } finally {
     clearTimeout(idleTimer);

@@ -64,14 +64,14 @@ rejects re-uploading an existing version).
 **Screenshots** (1280×800, captured from a working build on github.com; see
 `docs/store/screenshots/`):
 
-1. `1-data-notice.png`: the notice shown before anything is sent;
+1. `1-quick-actions.png`: Quick Actions, with the note on where data goes;
 2. `2-explain-repository.png`: repository overview;
 3. `3-explain-file.png`: file explanation pinned to a tag;
 4. `4-ask-gitguide.png`: answer with numbered source links and coverage note.
 
 Screenshots 2–4 were captured with a development build connected to a locally running
 copy of this API (live GitHub and Groq); the panel UI is identical to the release build.
-Screenshot 1 was captured from a build carrying the production API URL. Re-capture with
+Screenshot 1 was captured from a build carrying the production API URL (`ONLY=home`). Re-capture with
 `scripts/capture-screenshots.mjs` after visual changes.
 
 **Small promo tile (440×280, required):** `docs/store/promo-small-440x280.png`.
@@ -87,7 +87,7 @@ Screenshot 1 was captured from a build carrying the production API URL. Re-captu
 
 | Permission | Justification |
 | --- | --- |
-| `storage` | Saves the user's Ask GitGuide conversations, cached explanations, their acknowledgement of the data notice, and panel width locally, so they persist across page loads. Users can clear this from the panel. |
+| `storage` | Saves the user's Ask GitGuide conversations, cached explanations, and panel width locally, so they persist across page loads. Users can clear this from the panel. |
 | Host permission `https://gitguide-api.onrender.com/*` | The extension's service worker sends the user's requests (which public repository/file/issue, and chat questions) to GitGuide's own API, which generates the explanations. No other site is contacted by the extension's privileged context. |
 | Content script on `https://github.com/*` | Shows the GitGuide panel on GitHub and reads the current page address (repository, branch, file path, issue number) to know what to explain. Content is read locally to detect page readiness and changes; it is not transmitted. |
 
@@ -115,6 +115,13 @@ HTML.
 - I do not use or transfer user data for purposes unrelated to the item's single purpose.
 - I do not use or transfer user data to determine creditworthiness or for lending.
 
+**In-product disclosure:** the panel shows a short, non-blocking note under Quick Actions
+(public repositories only; what is sent; that Groq generates answers) linking to the full
+Privacy & data screen. There is no separate consent step: the data sent is what the
+features need and is described in the listing. The User Data Policy's prominent-disclosure
+and consent requirement applies to data use *not* closely related to the described
+functionality. **[VERIFY]** that reading against the current policy before submitting.
+
 **Privacy policy URL:** host `docs/PRIVACY.md` publicly after completing its **[VERIFY]**
 items. The extension links to `VITE_PRIVACY_POLICY_URL` (default
 `https://github.com/assemkdv/gitguide/blob/main/docs/PRIVACY.md`, which only works if the
@@ -132,9 +139,9 @@ usage, and the daily budget for a week, then make it Public.
 >
 > 1. Open https://github.com/sindresorhus/slugify (any public repository works).
 > 2. Click the round GitGuide button at the bottom right of the page.
-> 3. Click "Explain Repository". A notice explains what will be sent; click "I understand,
->    continue". An overview appears within ~10 seconds (the server may take up to a
->    minute to wake up on the first request).
+> 3. Click "Explain Repository". The note under Quick Actions says what is sent. An
+>    overview appears within ~10 seconds (the server may take up to a minute to wake up
+>    on the first request).
 > 4. Open `index.js` in the repository and click "Explain File" (or keep the panel on the
 >    file view; it updates automatically).
 > 5. Go back to Quick Actions, click "Ask GitGuide", and ask "How does slugifyWithCounter

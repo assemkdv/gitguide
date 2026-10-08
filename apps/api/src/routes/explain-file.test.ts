@@ -9,6 +9,7 @@ import { getGroqClient } from '../lib/groq-client';
 import { ApiError } from '../lib/errors';
 import { app } from '../server';
 import { FULL_ANALYSIS_CHARS } from './explain-file';
+import { OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
 
 const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 
@@ -67,6 +68,14 @@ describe('POST /v1/explain-file', () => {
     expect(prompt).not.toMatch(/3-5 items/);
     expect(prompt).not.toContain('rather than hedging');
     expect(prompt).toContain('do not pad');
+  });
+
+  it.each(['/v1/explain-file', '/v1/explain-file/quick'])('%s asks the model not to use em dashes', async (path) => {
+    await post(path, body);
+    const prompt = create.mock.calls[0][0].messages.map((m: { content: string }) => m.content).join('\n');
+    expect(prompt).toContain(OUTPUT_STYLE_RULES);
+    // The style rule itself names the character; nothing else in the template uses it.
+    expect(prompt.replace(OUTPUT_STYLE_RULES, '')).not.toContain('\u2014');
   });
 
   it.each([
