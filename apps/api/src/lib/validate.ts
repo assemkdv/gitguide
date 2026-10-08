@@ -10,6 +10,7 @@ export function validateBody<Schema extends z.ZodTypeAny>(schema: Schema) {
     if (!result.success) {
       res.status(400).json({
         error: 'Invalid request body',
+        code: 'INVALID_REQUEST',
         details: result.error.issues.map((issue) => ({
           path: issue.path.join('.') || '(root)',
           message: issue.message,

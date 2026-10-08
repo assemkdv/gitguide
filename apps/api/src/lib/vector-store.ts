@@ -1,8 +1,7 @@
-// Storage layer for indexed repo chunks. Deliberately in-process/in-memory for v1 (see
-// the plan doc's vector-store comparison) — the `VectorStore<T>` interface is what
-// keeps this a contained decision: a future SqliteVectorStore or RemoteVectorStore only
-// needs to implement get/set/has, with no change to the retrieval/indexing code that
-// depends on the interface, not this implementation.
+// Storage layer for indexed repo chunks. Deliberately in-process/in-memory for v1 — the
+// `VectorStore<T>` interface is what keeps this a contained decision: a future
+// SqliteVectorStore or RemoteVectorStore only needs to implement it, with no change to
+// the retrieval/indexing code that depends on the interface, not this implementation.
 
 export interface ChunkRecord {
   id: string; // `${filePath}:${startLine}-${endLine}` — stable within one repo+sha
@@ -34,9 +33,15 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 }
 
 export interface VectorStore<T> {
+  /** Reads and marks the entry as recently used. */
   get(key: string): T | undefined;
+  /** Reads without affecting recency — for background work, which must not keep an
+   * entry alive just by touching it. */
+  peek(key: string): T | undefined;
   set(key: string, value: T): void;
   has(key: string): boolean;
+  /** Registers a callback for entries dropped by eviction. */
+  onEvict(listener: (key: string, value: T) => void): void;
 }
 
 const DEFAULT_MAX_ENTRIES = 5;
@@ -49,6 +54,7 @@ const DEFAULT_MAX_ENTRIES = 5;
 export class InMemoryVectorStore<T> implements VectorStore<T> {
   private readonly entries = new Map<string, T>();
   private readonly maxEntries: number;
+  private readonly evictListeners: Array<(key: string, value: T) => void> = [];
 
   constructor(maxEntries: number = DEFAULT_MAX_ENTRIES) {
     this.maxEntries = maxEntries;
@@ -62,6 +68,10 @@ export class InMemoryVectorStore<T> implements VectorStore<T> {
     return value;
   }
 
+  peek(key: string): T | undefined {
+    return this.entries.get(key);
+  }
+
   has(key: string): boolean {
     return this.entries.has(key);
   }
@@ -69,9 +79,16 @@ export class InMemoryVectorStore<T> implements VectorStore<T> {
   set(key: string, value: T): void {
     this.entries.delete(key);
     this.entries.set(key, value);
-    if (this.entries.size > this.maxEntries) {
+    while (this.entries.size > this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
-      if (oldestKey !== undefined) this.entries.delete(oldestKey);
+      if (oldestKey === undefined) break;
+      const evicted = this.entries.get(oldestKey) as T;
+      this.entries.delete(oldestKey);
+      for (const listener of this.evictListeners) listener(oldestKey, evicted);
     }
+  }
+
+  onEvict(listener: (key: string, value: T) => void): void {
+    this.evictListeners.push(listener);
   }
 }

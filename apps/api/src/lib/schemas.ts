@@ -27,8 +27,6 @@ export const repoIdentitySchema = z.object({
   repoName: repoNameSchema,
 });
 
-export const explainRepoSchema = repoIdentitySchema;
-
 // A git ref (branch, tag, or commit SHA) — also interpolated into GitHub API/raw-content
 // URLs, so it gets the same treatment: reject ".." traversal segments and characters git
 // itself disallows in ref names, while still allowing slash-containing branch names like
@@ -54,20 +52,22 @@ function isValidRepoFilePath(path: string): boolean {
 }
 const filePathSchema = z.string().max(1000).refine(isValidRepoFilePath, 'must be a valid repository-relative file path');
 
+// Requests carry identifiers only — never page content. The server reads files and
+// issues itself from GitHub (public repositories only), at an exact commit, so nothing
+// the user's browser rendered (e.g. a private repository's DOM) is ever transmitted.
+
+export const explainRepoSchema = repoIdentitySchema.extend({
+  // Optional branch/tag/SHA; defaults to the repository's default branch.
+  ref: gitRefSchema.optional(),
+});
+
 export const explainFileSchema = repoIdentitySchema.extend({
+  ref: gitRefSchema,
   filePath: filePathSchema,
-  // No length floor here — the frontend already decides what counts as "ready" before
-  // calling this endpoint; the backend just needs a string to work with. Capped well
-  // above what the prompt actually uses (6000 chars) so oversized bodies are rejected
-  // before they reach Groq.
-  fileContent: z.string().max(200_000),
 });
 
 export const analyzeSchema = repoIdentitySchema.extend({
-  issueNumber: z.number().int().positive(),
-  issueTitle: nonEmptyString.max(500),
-  issueBody: z.string().max(50_000).default(''),
-  issueComments: z.string().max(50_000).default(''),
+  issueNumber: z.number().int().positive().max(100_000_000),
 });
 
 export const goodFirstIssuesSchema = repoIdentitySchema;
@@ -77,8 +77,8 @@ export const askRepoSchema = z.object({
   context: z.object({
     repoOwner: repoOwnerSchema,
     repoName: repoNameSchema,
-    // Only set on file pages (mirrors PageContext.fileRef); omitted otherwise, in which
-    // case the route falls back to the repo's default branch.
+    // The ref being viewed (file pages); omitted elsewhere, in which case the route
+    // uses the repository's default branch.
     ref: gitRefSchema.optional(),
   }),
   history: z

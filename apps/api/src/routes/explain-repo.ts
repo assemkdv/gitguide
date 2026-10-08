@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { getGoodFirstIssues, getFileContent } from '../lib/github';
-import { GroqResponseError } from '../lib/groq-json';
+import { getGoodFirstIssues, getFileAtCommit, resolveSnapshot, GoodFirstIssue } from '../lib/github';
 import { generateRepoSummary } from '../lib/repo-summary';
 import { validateBody } from '../lib/validate';
 import { explainRepoSchema } from '../lib/schemas';
+import { sendError, toApiError, ErrorCode } from '../lib/errors';
+import { requestSignal } from '../lib/request-signal';
+import { blobUrl } from '../lib/path-evidence';
 import type { z } from 'zod';
 
 export const explainRepoRouter = Router();
@@ -11,56 +13,63 @@ export const explainRepoRouter = Router();
 type ExplainRepoBody = z.infer<typeof explainRepoSchema>;
 
 explainRepoRouter.post('/', validateBody(explainRepoSchema), async (req: Request, res: Response) => {
-  const { repoOwner, repoName } = req.body as ExplainRepoBody;
-
-  // The client disconnects (panel closed, user navigated to a different repo) well
-  // before this multi-step pipeline would naturally finish — abort every in-flight
-  // GitHub/Groq call as soon as that happens instead of paying for work no one is
-  // waiting on anymore.
-  const controller = new AbortController();
-  res.on('close', () => controller.abort());
-  const { signal } = controller;
+  const { repoOwner, repoName, ref } = req.body as ExplainRepoBody;
+  const signal = requestSignal(req, res);
 
   try {
-    const [summaryResult, goodFirstIssues] = await Promise.all([
-      generateRepoSummary(repoOwner, repoName, undefined, signal),
-      getGoodFirstIssues(repoOwner, repoName, signal),
-    ]);
-    if (signal.aborted) return;
+    const snapshot = await resolveSnapshot(repoOwner, repoName, ref, signal);
 
-    const { repoInfo, tree, summary: parsed } = summaryResult;
-    const validPaths = new Set(tree);
-    const chosenEntrypoints = parsed.entrypoints.filter((e) => validPaths.has(e.path));
+    // Good-first-issues are a secondary section: if that lookup fails, the explanation
+    // still succeeds, but the response says the list is unavailable (null + error code)
+    // rather than pretending the repository has no such issues.
+    const issuesPromise: Promise<{ items: GoodFirstIssue[] | null; error: ErrorCode | null }> = getGoodFirstIssues(
+      repoOwner,
+      repoName,
+      signal,
+    ).then(
+      (items) => ({ items, error: null }),
+      (err) => {
+        if (signal.aborted) throw err;
+        return { items: null, error: toApiError(err).code };
+      },
+    );
 
+    const [{ summary, coverage, tree }, issues] = await Promise.all([generateRepoSummary(snapshot, signal), issuesPromise]);
+
+    const sizes = new Map(tree.files.map((f) => [f.path, f.size]));
     const keyEntrypoints = await Promise.all(
-      chosenEntrypoints.map(async (e) => {
-        const content = await getFileContent(repoOwner, repoName, repoInfo.defaultBranch, e.path, signal);
-        const loc = content ? content.split('\n').length : 0;
-        return { path: e.path, label: e.label, loc };
+      summary.entrypoints.map(async (e) => {
+        // Line counts need the file; skip the download for very large files.
+        let loc: number | null = null;
+        if ((sizes.get(e.path) ?? 0) <= 200_000) {
+          try {
+            const file = await getFileAtCommit(repoOwner, repoName, snapshot.commitSha, e.path, { signal });
+            loc = file.truncated ? null : file.content.split('\n').length;
+          } catch (err) {
+            if (signal.aborted) throw err;
+          }
+        }
+        return { path: e.path, label: e.label, loc, url: blobUrl(repoOwner, repoName, snapshot.commitSha, e.path) };
       }),
     );
     if (signal.aborted) return;
 
     res.json({
-      purpose: parsed.purpose,
-      techStack: parsed.techStack,
-      folderStructure: parsed.folderStructure,
-      architecture: parsed.architecture,
+      purpose: summary.purpose,
+      techStack: summary.techStack,
+      folderStructure: summary.folderStructure,
+      architecture: summary.architecture,
       keyEntrypoints,
-      dataFlow: parsed.dataFlow,
-      authPersistence: parsed.authPersistence,
-      howToRun: parsed.howToRun,
-      beginnerStart: parsed.beginnerStart,
-      goodFirstIssues,
+      dataFlow: summary.dataFlow,
+      authPersistence: summary.authPersistence,
+      howToRun: summary.howToRun,
+      beginnerStart: summary.beginnerStart,
+      goodFirstIssues: issues.items,
+      goodFirstIssuesError: issues.error,
+      meta: { ref: snapshot.ref, commitSha: snapshot.commitSha, ...coverage },
     });
   } catch (err) {
     if (signal.aborted) return;
-    if (err instanceof GroqResponseError) {
-      console.error('Explain repo: unusable model response:', err.message);
-      res.status(502).json({ error: 'The AI response was malformed. Please try again.' });
-      return;
-    }
-    console.error('Explain repo error:', err);
-    res.status(500).json({ error: 'Failed to explain repository' });
+    sendError(res, err, 'explain-repo');
   }
 });

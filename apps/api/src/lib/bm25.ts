@@ -31,6 +31,36 @@ export function tokenize(text: string): string[] {
   );
 }
 
+// Light suffix stripping so "chunks"/"chunking"/"chunked" and "limits"/"limited" meet.
+// Deliberately crude (no dictionary); applied identically to documents and queries.
+function stem(token: string): string {
+  if (token.length <= 4) return token;
+  for (const suffix of ['ing', 'ed', 'es', 's']) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= 3) return token.slice(0, -suffix.length);
+  }
+  return token;
+}
+
+/**
+ * Tokens used for BM25 scoring: everything `tokenize` produces, plus the sub-words of
+ * camelCase / PascalCase identifiers (so "getRepoTree" also matches "repo tree"), all
+ * lightly stemmed. Kept separate from `tokenize`, which other callers use for path
+ * matching where whole words are wanted.
+ */
+export function searchTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.match(/[A-Za-z0-9]+/g) ?? []) {
+    const parts = raw.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/);
+    const words = parts.length > 1 ? [raw, ...parts] : [raw];
+    for (const word of words) {
+      const lower = word.toLowerCase();
+      if (lower.length < MIN_TOKEN_LENGTH || STOPWORDS.has(lower)) continue;
+      out.push(stem(lower));
+    }
+  }
+  return out;
+}
+
 interface Posting {
   id: string;
   termFrequency: number;
@@ -50,7 +80,7 @@ export class BM25Index {
     let totalLength = 0;
 
     for (const doc of documents) {
-      const tokens = tokenize(doc.text);
+      const tokens = searchTokens(doc.text);
       this.docLengths.set(doc.id, tokens.length);
       totalLength += tokens.length;
 
@@ -79,7 +109,7 @@ export class BM25Index {
    * terms (never a full corpus scan) — documents sharing no term with the query never
    * appear, exactly like a real inverted-index search engine. */
   score(query: string): BM25Match[] {
-    const queryTerms = Array.from(new Set(tokenize(query)));
+    const queryTerms = Array.from(new Set(searchTokens(query)));
     const scores = new Map<string, number>();
 
     for (const term of queryTerms) {
