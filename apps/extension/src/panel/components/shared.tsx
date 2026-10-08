@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { UiError } from '../store';
 
 export const SC = {
   bg: '#0d1117',
@@ -53,6 +54,8 @@ export function Collapsible({
   return (
     <div style={{ border: `1px solid ${SC.borderMuted}`, borderRadius: 9, marginTop: 8, overflow: 'hidden' }}>
       <button
+        type="button"
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         style={{
           width: '100%',
@@ -80,10 +83,11 @@ export function Collapsible({
   );
 }
 
-export function BackButton({ onClick }: { onClick: () => void }) {
+export function BackButton({ onClick, label = 'Back to Quick Actions' }: { onClick: () => void; label?: string }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
+      type="button"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -102,16 +106,18 @@ export function BackButton({ onClick }: { onClick: () => void }) {
         transition: 'color 0.12s',
       }}
     >
-      <span style={{ fontSize: 13 }}>←</span>
-      Back to Quick Actions
+      <span style={{ fontSize: 13 }} aria-hidden="true">←</span>
+      {label}
     </button>
   );
 }
 
-function FooterButton({ onClick, label }: { onClick: () => void; label: string }) {
+function FooterButton({ onClick, label, title }: { onClick: () => void; label: string; title?: string }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
+      type="button"
+      title={title}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -131,15 +137,31 @@ function FooterButton({ onClick, label }: { onClick: () => void; label: string }
   );
 }
 
-export function ResultFooter({ getText, onContinueInChat }: { getText: () => string; onContinueInChat: () => void }) {
-  const [copied, setCopied] = useState(false);
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function ResultFooter({
+  getText,
+  onContinueInChat,
+  onRefresh,
+}: {
+  getText: () => string;
+  onContinueInChat: () => void;
+  onRefresh?: () => void;
+}) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const handleCopy = async () => {
     const text = getText();
     if (!text) return;
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setCopyState((await writeClipboard(text)) ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 1500);
   };
 
   const handleOpenInTab = () => {
@@ -147,14 +169,16 @@ export function ResultFooter({ getText, onContinueInChat }: { getText: () => str
     if (!text) return;
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   return (
     <div style={{ borderTop: `1px solid ${SC.borderMuted}`, flexShrink: 0 }}>
       <div style={{ display: 'flex', gap: 14, padding: '12px 16px 10px' }}>
-        <FooterButton onClick={handleCopy} label={copied ? 'Copied' : 'Copy'} />
+        <FooterButton onClick={handleCopy} label={copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'} />
         <FooterButton onClick={handleOpenInTab} label="Open in tab" />
+        {onRefresh && <FooterButton onClick={onRefresh} label="Refresh" title="Ignore the saved copy and explain again" />}
       </div>
       <div style={{ padding: '0 16px 14px' }}>
         <button
@@ -195,14 +219,15 @@ export function CopyButton({ getText }: { getText: () => string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
+      type="button"
       onClick={async () => {
         const text = getText();
         if (!text) return;
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
+        setCopied(await writeClipboard(text));
         setTimeout(() => setCopied(false), 1300);
       }}
       title="Copy"
+      aria-label="Copy explanation"
       style={{
         background: 'none',
         border: 'none',
@@ -238,7 +263,7 @@ export function LoadingTicker({
   }, [i, steps.length]);
 
   return (
-    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div role="status" aria-live="polite" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       {title && (
         <div>
           <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: SC.text }}>{title}</p>
@@ -264,9 +289,10 @@ export function LoadingTicker({
   );
 }
 
-export function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }) {
+export function ErrorCard({ error, onRetry }: { error: UiError; onRetry: () => void }) {
+  const message = error.message;
   return (
-    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div role="alert" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <span
           style={{
@@ -288,7 +314,8 @@ export function ErrorCard({ message, onRetry }: { message: string; onRetry: () =
         </span>
         <p style={{ margin: 0, color: SC.muted, fontSize: 12.5, lineHeight: 1.6 }}>{message}</p>
       </div>
-      <button
+      {error.retryable && <button
+        type="button"
         onClick={onRetry}
         style={{
           alignSelf: 'flex-start',
@@ -304,7 +331,7 @@ export function ErrorCard({ message, onRetry }: { message: string; onRetry: () =
         }}
       >
         Retry
-      </button>
+      </button>}
     </div>
   );
 }

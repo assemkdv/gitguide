@@ -193,3 +193,29 @@ describe('isFileContentReady', () => {
     expect(isFileContentReady('x'.repeat(20))).toBe(true);
   });
 });
+
+describe('detectRepoVisibility', () => {
+  afterEach(() => {
+    document.head.innerHTML = '';
+    document.body.innerHTML = '';
+  });
+
+  it('trusts the analytics meta tags only when they name this repository', async () => {
+    const { detectRepoVisibility } = await import('./page-parser');
+    document.head.innerHTML =
+      '<meta name="octolytics-dimension-repository_nwo" content="Owner/Repo"><meta name="octolytics-dimension-repository_public" content="false">';
+    expect(detectRepoVisibility('owner', 'repo')).toBe('private');
+    expect(detectRepoVisibility('owner', 'other')).toBe('unknown'); // stale tags from another repository
+    document.head.innerHTML =
+      '<meta name="octolytics-dimension-repository_nwo" content="owner/repo"><meta name="octolytics-dimension-repository_public" content="true">';
+    expect(detectRepoVisibility('owner', 'repo')).toBe('public');
+  });
+
+  it('falls back to the Private label in the repository header', async () => {
+    const { detectRepoVisibility } = await import('./page-parser');
+    document.body.innerHTML = '<div id="repository-container-header"><span class="Label Label--secondary">Private</span></div>';
+    expect(detectRepoVisibility('owner', 'repo')).toBe('private');
+    document.body.innerHTML = '<div id="repository-container-header"><span class="Label">Public</span></div>';
+    expect(detectRepoVisibility('owner', 'repo')).toBe('unknown');
+  });
+});

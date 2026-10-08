@@ -48,7 +48,7 @@ export function EmptyState() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: C.text }}>
-          Open a GitHub issue
+          Open a public GitHub repository
         </p>
         <p
           style={{
@@ -59,8 +59,8 @@ export function EmptyState() {
             maxWidth: 230,
           }}
         >
-          Navigate to any GitHub issue and GitGuide will analyze it — showing
-          difficulty, steps, and suggested files.
+          GitGuide explains public repositories, files, and issues, and answers
+          questions about their code.
         </p>
       </div>
 
@@ -75,7 +75,7 @@ export function EmptyState() {
           fontFamily: 'ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace',
         }}
       >
-        github.com/owner/repo/issues/123
+        github.com/owner/repo
       </div>
     </div>
   );
