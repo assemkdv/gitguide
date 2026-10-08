@@ -68,9 +68,29 @@ function teardown() {
  * only fires in that specific failure case, so it doesn't cost anything for the common
  * (non-slash-branch) path.
  */
-export function startFileDetection(route: FileRouteInfo, navStart: number): void {
+export interface FileDetectionOptions {
+  /** The page changed in place (SPA navigation) rather than loading fresh. Until GitHub
+   * repaints, the DOM still shows the previous page, so a DOM read that matches what was
+   * on screen at navigation time is the previous file, not this one. */
+  inPlaceNavigation?: boolean;
+  /** Content detected for the previous file page, if any — never valid for this one. */
+  previousContent?: string;
+}
+
+export function startFileDetection(route: FileRouteInfo, navStart: number, options: FileDetectionOptions = {}): void {
   const myNavId = ++navId;
   teardown();
+
+  // Content must belong to *this* file: it's fingerprinted with the cached explanation,
+  // so a stale read files this file's answer under another file's content and makes
+  // later visits miss the cache (or hit it for changed content).
+  const staleDom = options.inPlaceNavigation ? extractFileContentFromDom() : null;
+  const isStale = (content: string) =>
+    (staleDom !== null && content === staleDom) || (!!options.previousContent && content === options.previousContent);
+  const domContentIfCurrent = () => {
+    const content = extractFileContentFromDom();
+    return isFileContentReady(content) && !isStale(content) ? content : null;
+  };
 
   const { setPageContext, setFileStage, setFileNavStartedAt } = useStore.getState();
   setFileStage('file_detected');
@@ -89,10 +109,11 @@ export function startFileDetection(route: FileRouteInfo, navStart: number): void
     useStore.getState().setFileStage('content_extracted');
   };
 
-  // Immediate check — content may already be rendered (e.g. back/forward navigation
-  // that GitHub served from bfcache), so a fetch/observer may not even be needed.
-  const immediate = extractFileContentFromDom();
-  if (isFileContentReady(immediate)) {
+  // Immediate check — on a fresh page load the server-rendered content is already
+  // there, so a fetch/observer may not even be needed. After an in-place navigation the
+  // DOM still shows the previous page, which isStale rejects.
+  const immediate = domContentIfCurrent();
+  if (immediate) {
     applyContent(immediate, 'DOM (already rendered)');
     return;
   }
@@ -107,8 +128,8 @@ export function startFileDetection(route: FileRouteInfo, navStart: number): void
   activeObserver = new MutationObserver(() => {
     if (myNavId !== navId) return;
     resolved = resolveFileRoute(route); // refine as more of the page becomes available
-    const content = extractFileContentFromDom();
-    if (isFileContentReady(content)) applyContent(content, 'DOM observer');
+    const content = domContentIfCurrent();
+    if (content) applyContent(content, 'DOM observer');
   });
   activeObserver.observe(container, { childList: true, subtree: true });
 

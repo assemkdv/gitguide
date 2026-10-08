@@ -42,6 +42,7 @@ vulnerabilities at the time; after `npm audit fix` later in the session, see §5
 | 18 | **Chat history keyed by repository only**, contradicting the README's claim that a branch switch resets it; error text was appended into answers and later sent back to the model as history. | `AskGitGuidePage.tsx:111`; README | Answers record ref/commit; a notice appears when the viewed ref differs; failed/stopped/interrupted answers are excluded from history. |
 | 19 | **Node requirement wrong**: README said Node 18+, but eslint 10 / jsdom 29 need ≥20.19/22.13; CI pinned Node 20 (end of life April 2026). | dependency `engines` fields | `engines >=22.13.0`, `.nvmrc` 22, CI matrix 22/24, Render `NODE_VERSION=22`. |
 | 20 | **Manifest**: hard-coded API host permission (could drift from the build's URL); unused `github.com`/`raw.githubusercontent.com` host permissions; release builds weren't checked for localhost. | `manifest.json`, `vite.config.ts` | Permission derived from `VITE_API_URL`; release build rejects non-https/localhost; packaging script verifies the bundle; `minimum_chrome_version` 116. |
+| 21 | **Cached file explanations were saved under the previous file's content fingerprint** after in-page navigation: file detection read the code viewer immediately, before GitHub repainted, so `b.ts`'s answer was stored with `auth.ts`'s fingerprint. Later visits then hit or missed the cache depending on render timing, causing duplicate requests (and a matching stale fingerprint could hide a real content change). Found by a CI-only browser-test failure (PR #1, run 37705626766: 3 explain-file requests instead of 2). | Instrumented local run: stored fingerprint for `b.ts` = `1i-7161473e` (auth.ts's), expected `1f-dd7a0563`; new unit tests and the strengthened browser test fail on the original code (3/3) | `file-detection.ts` rejects DOM content that is still the previous page (what was on screen at navigation time, or the previous file's content) and waits for the repaint or the raw fetch; fresh page loads still use the rendered DOM. The browser test now reloads the page and requires a cache hit, which fails deterministically without the fix. |
 
 ### P2: usability
 
@@ -61,6 +62,7 @@ vulnerabilities at the time; after `npm audit fix` later in the session, see §5
 | Production uses the retired models | AI features may be down in production now | Startup check + `/ready` will show it after deploy | Check Render logs/`/ready` after deploying. |
 | Render proxy hop count | Wrong `trust proxy` → shared rate-limit bucket, or spoofable IPs; community reports vary (1–3) | `TRUST_PROXY_HOPS` env; per-request `xff` count logged (no IPs) | `docs/DEPLOYMENT.md` §4 |
 | Provider/host retention | Privacy policy accuracy | Marked **[VERIFY]** in `docs/PRIVACY.md` | Operator to confirm Groq and Render terms. |
+| Cache fingerprint source on real GitHub | A file's fingerprint comes from either the raw file or the rendered code viewer, whichever arrives first; if GitHub's rendered text differs from the raw file (e.g. whitespace between lines), revisits can miss the cache and re-request. Correctness is unaffected (requests carry identifiers only) | Not changed; fixture pages render identical text, so it can't be verified here | During the smoke test, revisit an explained file after a full reload and check that no new request appears (DevTools → service worker network). |
 | GitHub DOM selectors | File/issue readiness depends on GitHub markup that can change | Unchanged; server-side reading makes content accuracy independent of the DOM | Smoke test on real GitHub each release. |
 | In-memory limits | Budgets/counters reset on restart; per instance | Documented | Keep a single instance, or move state to a shared store. |
 
@@ -71,7 +73,7 @@ vulnerabilities at the time; after `npm audit fix` later in the session, see §5
 | `npm ci`, `npm run lint`, API build, extension `tsc`, `npm run build:extension` | pass |
 | API unit/integration (Vitest) | **292 passed** (22 files) |
 | Extension unit/integration (Vitest) | **133 passed** (12 files) |
-| Browser: built MV3 extension in Playwright Chromium 156 (fixture GitHub + mock API) | **13 passed**, 2 consecutive clean runs |
+| Browser: built MV3 extension in Playwright Chromium 156 (fixture GitHub + mock API) | **13 passed**, 2 consecutive clean runs. CI on PR #1 then failed one test intermittently (defect 21); after the fix, that test passed 5 consecutive repeated runs locally and fails 3/3 on the original code |
 | Release packaging checks (`scripts/package-extension.mjs`) | pass; ZIP checksum identical across rebuilds |
 | Original-code reproductions (worktree of `9779a7e`) | 5 navigation races, Enter-to-send, NaN width, EOF-as-done: all reproduced |
 | Retrieval eval (keyword-only, 16 questions on this repo) | before: hit@1 9, hit@3 12, hit@8 13; after tokenizer change: 9 / 12 / **15** |
