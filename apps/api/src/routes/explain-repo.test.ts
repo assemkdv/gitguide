@@ -1,109 +1,74 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
-vi.mock('../lib/github', () => ({
-  getRepoInfo: vi.fn(),
-  getReadme: vi.fn(),
-  getRepoTree: vi.fn(),
-  getGoodFirstIssues: vi.fn(),
-  getFileContent: vi.fn(),
-}));
-vi.mock('../lib/groq-client', () => ({
-  getGroqClient: vi.fn(),
-}));
+vi.mock('../lib/github', () => ({ resolveSnapshot: vi.fn(), getGoodFirstIssues: vi.fn(), getFileAtCommit: vi.fn() }));
+vi.mock('../lib/repo-summary', () => ({ generateRepoSummary: vi.fn() }));
 
-import { getRepoInfo, getReadme, getRepoTree, getGoodFirstIssues, getFileContent } from '../lib/github';
-import { getGroqClient } from '../lib/groq-client';
+import { resolveSnapshot, getGoodFirstIssues, getFileAtCommit } from '../lib/github';
+import { generateRepoSummary } from '../lib/repo-summary';
+import { ApiError } from '../lib/errors';
 import { app } from '../server';
 
-function mockGroqCompletion(content: unknown) {
-  vi.mocked(getGroqClient).mockReturnValue({
-    chat: {
-      completions: {
-        create: vi.fn().mockResolvedValue({ choices: [{ message: { content: JSON.stringify(content) } }] }),
-      },
-    },
-  } as any);
-}
+const EXTENSION_ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop';
 
-// Regression suite: proves /v1/explain-repo's output is unchanged after extracting its
-// prompt/parsing core into lib/repo-summary.ts for reuse by the RAG indexer.
+const SHA = '1'.repeat(40);
+const SUMMARY = {
+  purpose: 'p', techStack: ['TS'], folderStructure: [], architecture: [],
+  entrypoints: [{ path: 'src/index.ts', label: 'Entry' }],
+  dataFlow: '', authPersistence: '', howToRun: [], beginnerStart: 'b',
+};
+
+const post = (body: unknown) => request(app).post('/v1/explain-repo').set('Origin', EXTENSION_ORIGIN).send(body);
+
+beforeEach(() => {
+  vi.mocked(resolveSnapshot).mockReset().mockImplementation(async (owner, repo, ref) => ({
+    owner, repo, repoInfo: { description: null, defaultBranch: 'main', language: null, topics: [] }, ref: ref ?? 'main', commitSha: SHA,
+  }));
+  vi.mocked(getGoodFirstIssues).mockReset().mockResolvedValue([{ number: 1, title: 't', labels: [], category: 'help wanted', comments: 0 }]);
+  vi.mocked(getFileAtCommit).mockReset().mockResolvedValue({ content: 'a\nb\nc', truncated: false, bytesRead: 5 });
+  vi.mocked(generateRepoSummary).mockReset().mockResolvedValue({
+    summary: SUMMARY,
+    tree: { files: [{ path: 'src/index.ts', size: 5 }], truncated: true },
+    coverage: { filesInTree: 1, filesShownToModel: 1, treeTruncated: true, readmeTruncated: false, hasReadme: true },
+  });
+});
+
 describe('POST /v1/explain-repo', () => {
-  beforeEach(() => {
-    vi.mocked(getRepoInfo).mockResolvedValue({ description: 'A test repo', defaultBranch: 'main', language: 'TypeScript', topics: [] });
-    vi.mocked(getReadme).mockResolvedValue('# Test repo\nSome readme content.');
-    vi.mocked(getRepoTree).mockResolvedValue(['src/index.ts', 'src/server.ts', 'README.md']);
-    vi.mocked(getGoodFirstIssues).mockResolvedValue([
-      { number: 1, title: 'Fix bug', labels: ['good first issue'], category: 'good first issue', comments: 2 },
-    ]);
-    vi.mocked(getFileContent).mockResolvedValue('line1\nline2\nline3');
-    mockGroqCompletion({
-      purpose: 'A test repo for testing.',
-      techStack: ['TypeScript', 'Node.js'],
-      folderStructure: [{ path: 'src', description: 'Source code' }],
-      architecture: [{ title: 'Server', description: 'Express server' }],
-      entrypoints: [{ path: 'src/server.ts', label: 'Server entry' }],
-      dataFlow: 'Requests flow through the server.',
-      authPersistence: '',
-      howToRun: ['npm install', 'npm start'],
-      beginnerStart: 'Start with src/server.ts.',
-    });
-  });
-
-  it('returns the expected response shape', async () => {
-    const res = await request(app)
-      .post('/v1/explain-repo')
-      .set('Origin', 'https://github.com')
-      .send({ repoOwner: 'owner', repoName: 'repo' });
-
+  it('returns the explanation pinned to a commit, with coverage metadata and commit links', async () => {
+    const res = await post({ repoOwner: 'owner', repoName: 'repo' });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      purpose: 'A test repo for testing.',
-      techStack: ['TypeScript', 'Node.js'],
-      folderStructure: [{ path: 'src', description: 'Source code' }],
-      architecture: [{ title: 'Server', description: 'Express server' }],
-      keyEntrypoints: [{ path: 'src/server.ts', label: 'Server entry', loc: 3 }],
-      dataFlow: 'Requests flow through the server.',
-      authPersistence: '',
-      howToRun: ['npm install', 'npm start'],
-      beginnerStart: 'Start with src/server.ts.',
-      goodFirstIssues: [{ number: 1, title: 'Fix bug', labels: ['good first issue'], category: 'good first issue', comments: 2 }],
-    });
+    expect(res.body.keyEntrypoints).toEqual([{ path: 'src/index.ts', label: 'Entry', loc: 3, url: `https://github.com/owner/repo/blob/${SHA}/src/index.ts` }]);
+    expect(res.body.meta).toMatchObject({ ref: 'main', commitSha: SHA, treeTruncated: true });
+    expect(getFileAtCommit).toHaveBeenCalledWith('owner', 'repo', SHA, 'src/index.ts', expect.anything());
   });
 
-  it('discards a model-suggested entrypoint path that is not in the real file tree', async () => {
-    mockGroqCompletion({
-      purpose: 'x',
-      techStack: [],
-      folderStructure: [],
-      architecture: [],
-      entrypoints: [
-        { path: 'src/server.ts', label: 'Real' },
-        { path: 'src/hallucinated.ts', label: 'Fake' },
-      ],
-      dataFlow: '',
-      authPersistence: '',
-      howToRun: [],
-      beginnerStart: '',
-    });
-
-    const res = await request(app)
-      .post('/v1/explain-repo')
-      .set('Origin', 'https://github.com')
-      .send({ repoOwner: 'owner', repoName: 'repo' });
-
-    expect(res.body.keyEntrypoints).toEqual([{ path: 'src/server.ts', label: 'Real', loc: 3 }]);
+  it('explains a specific ref when one is given', async () => {
+    await post({ repoOwner: 'owner', repoName: 'repo', ref: 'v2.0.0' });
+    expect(resolveSnapshot).toHaveBeenCalledWith('owner', 'repo', 'v2.0.0', expect.anything());
   });
 
-  it('resolves the tree and entrypoint content against the repo default branch', async () => {
-    await request(app).post('/v1/explain-repo').set('Origin', 'https://github.com').send({ repoOwner: 'owner', repoName: 'repo' });
+  it('marks good-first-issues as unavailable (not empty) when that lookup fails', async () => {
+    vi.mocked(getGoodFirstIssues).mockRejectedValue(new ApiError('GITHUB_RATE_LIMITED', 503, 'limited', 60));
+    const res = await post({ repoOwner: 'owner', repoName: 'repo' });
+    expect(res.status).toBe(200);
+    expect(res.body.goodFirstIssues).toBeNull();
+    expect(res.body.goodFirstIssuesError).toBe('GITHUB_RATE_LIMITED');
+  });
 
-    expect(getRepoTree).toHaveBeenCalledWith('owner', 'repo', 'main', expect.anything());
-    expect(getFileContent).toHaveBeenCalledWith('owner', 'repo', 'main', 'src/server.ts', expect.anything());
+  it.each([
+    ['REPO_NOT_FOUND', 404],
+    ['PRIVATE_REPO_UNSUPPORTED', 403],
+    ['GITHUB_RATE_LIMITED', 503],
+  ] as const)('returns a structured %s error', async (code, status) => {
+    vi.mocked(resolveSnapshot).mockRejectedValue(new ApiError(code, status, 'msg', code === 'GITHUB_RATE_LIMITED' ? 30 : undefined));
+    const res = await post({ repoOwner: 'owner', repoName: 'repo' });
+    expect(res.status).toBe(status);
+    expect(res.body).toMatchObject({ code, error: 'msg' });
+    if (code === 'GITHUB_RATE_LIMITED') expect(res.headers['retry-after']).toBe('30');
   });
 
   it('rejects a request missing required fields', async () => {
-    const res = await request(app).post('/v1/explain-repo').set('Origin', 'https://github.com').send({ repoOwner: 'owner' });
+    const res = await post({ repoOwner: 'owner' });
     expect(res.status).toBe(400);
   });
 });

@@ -9,6 +9,12 @@
 import { BM25Index } from './bm25';
 import { ChunkRecord, cosineSimilarity } from './vector-store';
 
+/** Text a chunk is indexed under for keyword search: its file path (so "chunking" finds
+ * chunking.ts even when the code never says "chunking") followed by its content. */
+export function chunkSearchText(chunk: Pick<ChunkRecord, 'filePath' | 'text'>): string {
+  return `${chunk.filePath.replace(/[/._-]/g, ' ')}\n${chunk.text}`;
+}
+
 export interface RetrievalResult {
   chunk: ChunkRecord;
   score: number;

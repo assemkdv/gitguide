@@ -75,3 +75,16 @@ describe('createRateLimit', () => {
     });
   });
 });
+
+describe('createRateLimit response', () => {
+  it('returns a structured RATE_LIMITED body with Retry-After', async () => {
+    const app = express();
+    app.use(createRateLimit(60_000, 1));
+    app.get('/ping', (_req, res) => res.json({ ok: true }));
+    await request(app).get('/ping');
+    const blocked = await request(app).get('/ping');
+    expect(blocked.status).toBe(429);
+    expect(blocked.body).toMatchObject({ code: 'RATE_LIMITED', retryAfterSec: 60 });
+    expect(blocked.headers['retry-after']).toBe('60');
+  });
+});

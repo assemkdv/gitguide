@@ -34,7 +34,7 @@ describe('repoIdentitySchema — repoOwner/repoName', () => {
 });
 
 describe('explainFileSchema — filePath', () => {
-  const base = { repoOwner: 'owner', repoName: 'repo', fileContent: 'x' };
+  const base = { repoOwner: 'owner', repoName: 'repo', ref: 'main' };
 
   it.each([
     'src/index.ts',
