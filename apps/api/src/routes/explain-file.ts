@@ -10,7 +10,7 @@ import { getConfig } from '../lib/config';
 import { modelOptions } from '../lib/ai-models';
 import { sendError } from '../lib/errors';
 import { checkPaths, blobUrl } from '../lib/path-evidence';
-import { untrusted, UNTRUSTED_DATA_RULES } from '../lib/prompt-safety';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
 import { requestSignal } from '../lib/request-signal';
 import type { z } from 'zod';
 
@@ -69,6 +69,8 @@ explainFileRouter.post('/', validateBody(explainFileSchema), async (req: Request
 
     const system = `You are a senior software engineer explaining a single file to a new contributor.
 
+${OUTPUT_STYLE_RULES}
+
 ${UNTRUSTED_DATA_RULES}
 - Clearly separate what the file itself shows from inference: when you infer something not visible in the file (for example who calls it), say "likely" or "probably".
 
@@ -82,10 +84,10 @@ Return this JSON shape:
 {
   "purpose": "1 sentence: what this file is responsible for",
   "summary": "2-3 sentence plain-English walkthrough of what the file does",
-  "mainComponents": ["function/class/export name — what it does"],
+  "mainComponents": ["function/class/export name: what it does"],
   "inputsOutputs": "1-2 sentences on inputs and outputs, or empty string if not applicable",
   "dependencies": ["import or package actually referenced in the file"],
-  "usedBy": "1 sentence on what likely uses this file (this is inference — say so), or empty string",
+  "usedBy": "1 sentence on what likely uses this file (this is inference, so say so), or empty string",
   "connections": "1-2 sentences on how it fits into the project, or empty string if the file doesn't show it",
   "importantLogic": "1-2 sentences on the most important logic, or empty string for trivial files",
   "edgeCases": "1-2 sentences on edge cases visible in the code, or empty string if none are evident",
@@ -146,7 +148,7 @@ explainFileRouter.post('/quick', validateBody(explainFileSchema), async (req: Re
           messages: [
             {
               role: 'system',
-              content: `Give a fast, factual orientation to a single file.\n\n${UNTRUSTED_DATA_RULES}\n\nRespond with ONLY valid JSON: {"purpose": "1 sentence", "summary": "1-2 sentences"}`,
+              content: `Give a fast, factual orientation to a single file.\n\n${OUTPUT_STYLE_RULES}\n\n${UNTRUSTED_DATA_RULES}\n\nRespond with ONLY valid JSON: {"purpose": "1 sentence", "summary": "1-2 sentences"}`,
             },
             { role: 'user', content: `${fileHeader(snapshot, meta)}\n\n${untrusted('file_content', excerpt)}` },
           ],

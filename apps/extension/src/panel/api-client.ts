@@ -59,7 +59,7 @@ export function toUiError(err: unknown): UiError {
       return {
         code: err.code,
         retryable,
-        message: "Couldn't reach the GitGuide server. Check your connection — if the server was idle it can take up to a minute to start.",
+        message: "Couldn't reach the GitGuide server. Check your connection. If the server was idle, it can take up to a minute to start.",
       };
     case 'EXTENSION_RELOADED':
       return { code: err.code, retryable: false, message: err.message };

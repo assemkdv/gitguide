@@ -2,7 +2,7 @@ import { getReadme, getTree, RepoSnapshot, RepoTree } from './github';
 import { getGroqClient } from './groq-client';
 import { parseJsonCompletion } from './groq-json';
 import { explainRepoOutputSchema } from './output-schemas';
-import { untrusted, UNTRUSTED_DATA_RULES } from './prompt-safety';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from './prompt-safety';
 import { withAiSlot } from './ai-guard';
 import { getConfig } from './config';
 import { modelOptions } from './ai-models';
@@ -50,6 +50,8 @@ export async function generateRepoSummary(snapshot: RepoSnapshot, signal?: Abort
   const topLevelDirs = Array.from(new Set(paths.filter((p) => p.includes('/')).map((p) => p.split('/')[0]))).slice(0, 25);
 
   const system = `You are a senior software engineer giving a new contributor a fast, accurate orientation to a codebase.
+
+${OUTPUT_STYLE_RULES}
 
 ${UNTRUSTED_DATA_RULES}
 

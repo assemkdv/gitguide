@@ -41,8 +41,8 @@ your GitHub credentials.
 
 ## What is sent to the GitGuide server
 
-Only after you choose an action (and after acknowledging an in-panel notice the first
-time), the extension sends the GitGuide API at **[VERIFY: production API URL, currently
+Only after you choose an action (a short note under Quick Actions summarizes this, and
+the panel's Privacy & data screen gives the details), the extension sends the GitGuide API at **[VERIFY: production API URL, currently
 `https://gitguide-api.onrender.com`]**:
 
 | Feature | Data sent |
@@ -97,7 +97,7 @@ In `chrome.storage.local` (this browser profile only):
 - Ask GitGuide conversations, per repository (most recent 60 messages each), until you
   clear them;
 - cached explanations (repository: 30 minutes; files and issues: 24 hours);
-- your acknowledgement of the data notice and your preferred panel width.
+- your preferred panel width.
 
 You can delete conversations and cached explanations at any time from the panel
 (**Privacy & data → Clear chat history and cached explanations**) or per repository with
@@ -118,5 +118,5 @@ GitGuide is a developer tool and is not directed at children.
 
 ## Changes and contact
 
-Material changes will be reflected in this policy and in the extension's in-panel data
-notice. Questions: **[VERIFY: contact email]**.
+Material changes will be reflected in this policy and in the extension's Privacy & data
+screen. Questions: **[VERIFY: contact email]**.

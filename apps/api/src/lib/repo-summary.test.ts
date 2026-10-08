@@ -7,6 +7,7 @@ import { getReadme, getTree } from './github';
 import type { RepoSnapshot } from './github';
 import { getGroqClient } from './groq-client';
 import { generateRepoSummary, formatRepoSummaryForPrompt, sampleTree, RepoSummaryFields } from './repo-summary';
+import { OUTPUT_STYLE_RULES } from './prompt-safety';
 
 const SHA = 'f'.repeat(40);
 const VALID_SUMMARY = {
@@ -68,6 +69,9 @@ describe('generateRepoSummary', () => {
     expect(user).not.toMatch(/exactly \d/i);
     expect(user).not.toContain('most likely convention');
     expect(user).toContain('return an empty array');
+    expect(system).toContain(OUTPUT_STYLE_RULES);
+    // The style rule itself names the character; nothing else in the template uses it.
+    expect(`${system}\n${user}`.replace(OUTPUT_STYLE_RULES, '')).not.toContain('\u2014');
   });
 
   it('rejects an empty/unusable model reply instead of returning an empty explanation', async () => {

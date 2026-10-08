@@ -12,7 +12,7 @@ import { getConfig } from '../lib/config';
 import { modelOptions } from '../lib/ai-models';
 import { ApiError, errorBody, logRouteError, toApiError } from '../lib/errors';
 import { blobUrl } from '../lib/path-evidence';
-import { untrusted, UNTRUSTED_DATA_RULES } from '../lib/prompt-safety';
+import { untrusted, UNTRUSTED_DATA_RULES, OUTPUT_STYLE_RULES } from '../lib/prompt-safety';
 import type { z } from 'zod';
 
 export const askRepoRouter = Router();
@@ -102,6 +102,8 @@ askRepoRouter.post('/', validateBody(askRepoSchema), async (req: Request, res: R
       : `Only part of the repository has been indexed so far (${entry.coverage.indexedFiles} of ${entry.coverage.eligibleFiles} eligible files${entry.coverage.treeTruncated ? ', and GitHub truncated the file listing' : ''}). Something not shown in the excerpts may still exist in the repository.`;
 
     const systemPrompt = `You are GitGuide, helping a developer understand the GitHub repository ${context.repoOwner}/${context.repoName} at ${snapshot.ref} (commit ${snapshot.commitSha.slice(0, 7)}).
+
+${OUTPUT_STYLE_RULES}
 
 ${UNTRUSTED_DATA_RULES}
 

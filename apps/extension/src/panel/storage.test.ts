@@ -5,13 +5,11 @@ import {
   clearAllHistoryAndCaches,
   fingerprint,
   loadCached,
-  loadConsent,
   loadPanelWidth,
   loadRepoChatMessages,
   pruneExpiredCache,
   sanitizePanelWidth,
   saveCached,
-  saveConsent,
   saveRepoChatMessages,
   MAX_STORED_MESSAGES,
   DEFAULT_PANEL_WIDTH,
@@ -55,12 +53,13 @@ describe('cache scoping and lifecycle', () => {
     expect(await loadCached('cache:v2:f', normalizeFileResult, fingerprint('v1'))).not.toBeNull();
   });
 
-  it('prunes expired and pre-v2 cache entries, leaving chats, settings, and fresh entries', async () => {
+  it('prunes expired and pre-v2 cache entries and the old data-notice record, leaving chats, settings, and fresh entries', async () => {
     chrome.store['cache:v2:fresh'] = { data: 1, savedAt: 1, expiresAt: Date.now() + 60_000 };
     chrome.store['cache:v2:old'] = { data: 1, savedAt: 1, expiresAt: Date.now() - 1 };
     chrome.store['cache:repo:o/r'] = { data: 1, expiresAt: Date.now() + 60_000 };
     chrome.store['chat:v2:o/r'] = { messages: [] };
     chrome.store['settings:panelWidth'] = 400;
+    chrome.store['settings:dataNotice'] = { version: 1 };
     await pruneExpiredCache();
     expect(Object.keys(chrome.store).sort()).toEqual(['cache:v2:fresh', 'chat:v2:o/r', 'settings:panelWidth']);
   });
@@ -111,21 +110,13 @@ describe('chat history storage', () => {
     chrome.store['chat:v2:o/r'] = { messages: [] };
     chrome.store['chat:o/legacy'] = [];
     chrome.store['cache:v2:x'] = {};
-    chrome.store['settings:dataNotice'] = { version: 1 };
+    chrome.store['settings:panelWidth'] = 400;
     expect(await clearAllHistoryAndCaches()).toBe(true);
-    expect(Object.keys(chrome.store)).toEqual(['settings:dataNotice']);
+    expect(Object.keys(chrome.store)).toEqual(['settings:panelWidth']);
   });
 });
 
 describe('settings', () => {
-  it('stores data-notice acknowledgement by version', async () => {
-    expect(await loadConsent()).toBe(false);
-    await saveConsent();
-    expect(await loadConsent()).toBe(true);
-    chrome.store['settings:dataNotice'] = { version: 0 };
-    expect(await loadConsent()).toBe(false);
-  });
-
   it.each([
     ['abc', DEFAULT_PANEL_WIDTH],
     [NaN, DEFAULT_PANEL_WIDTH],

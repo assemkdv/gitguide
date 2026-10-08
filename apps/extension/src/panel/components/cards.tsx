@@ -231,10 +231,10 @@ export function formatRepoResultAsText(r: ExplainRepoResult): string {
     `Tech stack: ${r.techStack.join(', ')}`,
     '',
     'Folder structure:',
-    ...r.folderStructure.map((f) => `- ${f.path} — ${f.description}`),
+    ...r.folderStructure.map((f) => `- ${f.path}: ${f.description}`),
     '',
     'Architecture:',
-    ...r.architecture.map((a, i) => `${i + 1}. ${a.title} — ${a.description}`),
+    ...r.architecture.map((a, i) => `${i + 1}. ${a.title}: ${a.description}`),
     '',
     'Key entrypoints:',
     ...r.keyEntrypoints.map((e) => `- ${e.path} (${e.label}${e.loc != null ? `, ${e.loc} loc` : ''})`),
@@ -286,7 +286,7 @@ export function formatIssueResultAsText(a: AnalysisResult): string {
     `Expected behavior: ${a.expectedBehavior}`,
   ];
   if (a.discussionContext) lines.push('', `Discussion context: ${a.discussionContext}`);
-  lines.push('', 'Relevant files:', ...a.relevantFiles.map((f) => `- ${pathLabel(f)} — ${f.reason}`));
+  lines.push('', 'Relevant files:', ...a.relevantFiles.map((f) => `- ${pathLabel(f)}: ${f.reason}`));
   lines.push('', 'Implementation steps:', ...a.implementationSteps.map((s, i) => `${i + 1}. ${s}`));
   lines.push('', `Risks: ${a.risks}`, `Testing: ${a.testingConsiderations}`);
   lines.push('', `Difficulty: ${a.difficulty} · ${a.timeEstimate}`);
@@ -344,7 +344,7 @@ export function RepoCard({
                 {String(i + 1).padStart(2, '0')}
               </span>
               <span style={{ fontSize: 12.5, color: C.textSub, lineHeight: 1.6 }}>
-                <strong style={{ color: C.text, fontWeight: 600 }}>{item.title}</strong> — {item.description}
+                <strong style={{ color: C.text, fontWeight: 600 }}>{item.title}:</strong> {item.description}
               </span>
             </div>
           ))}

@@ -25,8 +25,8 @@ actually approachable means reading through code and comment threads by hand.
 
 ## Privacy model
 
-GitGuide supports **public repositories only**. Before the first AI request, the panel
-explains exactly what is sent:
+GitGuide supports **public repositories only**. A short note under Quick Actions says
+where data goes, without blocking anything; the Privacy & data screen has the details:
 
 - the extension sends only *identifiers* (repository, branch/tag, file path, issue
   number) and, for chat, your question and recent messages; never page content, cookies,

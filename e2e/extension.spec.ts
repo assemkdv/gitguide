@@ -38,11 +38,8 @@ async function openPanel(page: Page) {
   await expect(panel(page)).toBeVisible();
 }
 
-/** Clicks a Quick Action; on the first use, acknowledges the data notice. */
 async function runQuickAction(page: Page, label: string) {
   await panel(page).getByRole('button', { name: new RegExp(label) }).click();
-  const accept = panel(page).getByRole('button', { name: 'I understand, continue' });
-  if (await accept.isVisible().catch(() => false)) await accept.click();
 }
 
 async function spaClick(page: Page, id: string) {
@@ -50,15 +47,24 @@ async function spaClick(page: Page, id: string) {
 }
 
 test.describe('GitGuide extension in Chromium', () => {
-  test('shows the data notice first and sends nothing until it is acknowledged', async ({ page, api }) => {
+  test('Quick Actions show where data goes without blocking; the first action runs immediately', async ({ page, api }) => {
     await page.goto('https://github.com/owner/repo');
     await openPanel(page);
-    await panel(page).getByRole('button', { name: /Explain Repository/ }).click();
-    await expect(panel(page).getByRole('heading', { name: 'Before GitGuide sends anything' })).toBeVisible();
-    await expect(panel(page)).toContainText('public GitHub repositories only');
-    expect(api.requests).toHaveLength(0);
+    await expect(panel(page)).toContainText('Public repositories only.');
+    await expect(panel(page)).toContainText('uses Groq to answer');
+    await expect(panel(page)).not.toContainText('can be wrong');
+    expect(await panel(page).innerText()).not.toContain('\u2014');
+    expect(api.requests).toHaveLength(0); // opening the panel sends nothing
 
-    await panel(page).getByRole('button', { name: 'I understand, continue' }).click();
+    // The disclosure links to the full Privacy & data screen, which keeps the clear control.
+    await panel(page).getByRole('button', { name: 'Privacy & data', exact: true }).click();
+    await expect(panel(page).getByRole('heading', { name: 'Privacy & data' })).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: /Clear chat history and cached explanations/ })).toBeVisible();
+    await expect(panel(page)).not.toContainText('acknowledged');
+    expect(await panel(page).innerText()).not.toContain('\u2014');
+    await panel(page).getByRole('button', { name: 'Back' }).click();
+
+    await runQuickAction(page, 'Explain Repository');
     await expect(panel(page)).toContainText('Explains repo');
     await expect(panel(page)).toContainText(`Based on main @ ${MOCK_SHA.slice(0, 7)}`);
     expect(api.requestsTo('/v1/explain-repo')[0].body).toEqual({ repoOwner: 'owner', repoName: 'repo' });
