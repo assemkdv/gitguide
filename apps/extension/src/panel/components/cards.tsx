@@ -1,6 +1,40 @@
 import React from 'react';
 import { AnalysisResult, Difficulty, ExplainFileQuickResult, ExplainFileResult, ExplainRepoResult, GoodFirstIssueItem } from '../store';
 import { Collapsible, CopyButton, sectionLabel, SC as C } from './shared';
+import type { CheckedPath } from '../store';
+
+function shortSha(sha: string | undefined): string {
+  return sha ? sha.slice(0, 7) : '';
+}
+
+/** Small provenance line: which ref/commit an explanation was produced from. */
+export function SourceNote({ children }: { children: React.ReactNode }) {
+  return <p style={{ margin: '10px 0 0', fontSize: 10.5, color: C.mutedDim, lineHeight: 1.5 }}>{children}</p>;
+}
+
+function Notice({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      role="note"
+      style={{ margin: '0 0 10px', padding: '7px 10px', fontSize: 11.5, lineHeight: 1.5, color: '#d29922', background: 'rgba(210,153,34,0.08)', border: '1px solid rgba(210,153,34,0.25)', borderRadius: 7 }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function VerifiedTag({ verified }: { verified: boolean }) {
+  return (
+    <span
+      title={verified ? 'This file exists in the repository at the analyzed commit.' : 'Suggested by the AI; GitGuide could not find this exact file in the repository.'}
+      style={{ fontSize: 9.5, fontWeight: 600, padding: '0 5px', borderRadius: 99, marginLeft: 6, whiteSpace: 'nowrap', color: verified ? '#3fb950' : '#d29922', border: `1px solid ${verified ? 'rgba(63,185,80,0.35)' : 'rgba(210,153,34,0.35)'}` }}
+    >
+      {verified ? 'exists' : 'suggestion'}
+    </span>
+  );
+}
+
+const pathLabel = (f: CheckedPath) => `${f.path}${f.verified ? '' : ' (unverified suggestion)'}`;
 
 const DIFFICULTY_CONFIG: Record<Difficulty, { bg: string; color: string; border: string; label: string }> = {
   beginner: { bg: 'rgba(63,185,80,0.1)', color: '#3fb950', border: 'rgba(63,185,80,0.25)', label: 'Beginner' },
@@ -203,14 +237,15 @@ export function formatRepoResultAsText(r: ExplainRepoResult): string {
     ...r.architecture.map((a, i) => `${i + 1}. ${a.title} — ${a.description}`),
     '',
     'Key entrypoints:',
-    ...r.keyEntrypoints.map((e) => `- ${e.path} (${e.label}, ${e.loc} loc)`),
+    ...r.keyEntrypoints.map((e) => `- ${e.path} (${e.label}${e.loc != null ? `, ${e.loc} loc` : ''})`),
     '',
     `Data flow: ${r.dataFlow}`,
   ];
   if (r.authPersistence) lines.push('', `Auth/persistence: ${r.authPersistence}`);
   lines.push('', 'How to run:', ...r.howToRun.map((s, i) => `${i + 1}. ${s}`));
   lines.push('', `Where to start: ${r.beginnerStart}`);
-  lines.push('', 'Good first issues:', ...r.goodFirstIssues.map((i) => `- #${i.number} ${i.title} [${i.category}]`));
+  if (r.goodFirstIssues) lines.push('', 'Good first issues:', ...r.goodFirstIssues.map((i) => `- #${i.number} ${i.title} [${i.category}]`));
+  if (r.meta) lines.push('', `Source: ${r.meta.ref} @ ${shortSha(r.meta.commitSha)}`);
   return lines.join('\n');
 }
 
@@ -235,7 +270,8 @@ export function formatFileResultAsText(r: ExplainFileResult): string {
   ];
   if (r.edgeCases) lines.push('', `Edge cases: ${r.edgeCases}`);
   lines.push('', `For contributors: ${r.contributorNotes}`);
-  if (r.relatedFiles.length) lines.push('', 'Related files:', ...r.relatedFiles.map((f) => `- ${f}`));
+  if (r.relatedFiles.length) lines.push('', 'Related files:', ...r.relatedFiles.map((f) => `- ${pathLabel(f)}`));
+  if (r.meta) lines.push('', `Source: ${r.meta.path} at ${r.meta.ref} @ ${shortSha(r.meta.commitSha)}${r.meta.truncated ? ` (first ${r.meta.analyzedChars} of ${r.meta.totalChars} characters analyzed)` : ''}`);
   return lines.join('\n');
 }
 
@@ -250,7 +286,7 @@ export function formatIssueResultAsText(a: AnalysisResult): string {
     `Expected behavior: ${a.expectedBehavior}`,
   ];
   if (a.discussionContext) lines.push('', `Discussion context: ${a.discussionContext}`);
-  lines.push('', 'Relevant files:', ...a.relevantFiles.map((f) => `- ${f.path} — ${f.reason}`));
+  lines.push('', 'Relevant files:', ...a.relevantFiles.map((f) => `- ${pathLabel(f)} — ${f.reason}`));
   lines.push('', 'Implementation steps:', ...a.implementationSteps.map((s, i) => `${i + 1}. ${s}`));
   lines.push('', `Risks: ${a.risks}`, `Testing: ${a.testingConsiderations}`);
   lines.push('', `Difficulty: ${a.difficulty} · ${a.timeEstimate}`);
@@ -317,11 +353,21 @@ export function RepoCard({
 
       <Collapsible title="Key entrypoints" icon={<CodeIcon />}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {data.keyEntrypoints.length === 0 && (
+            <p style={{ margin: 0, fontSize: 12, color: C.mutedDim }}>No entrypoints could be confirmed from the file tree.</p>
+          )}
           {data.keyEntrypoints.map((e, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 0' }}>
-              <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, color: C.muted, wordBreak: 'break-all' }}>{e.path}</span>
+              {e.url ? (
+                <a href={e.url} target="_blank" rel="noopener noreferrer" className="gg-link" style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, wordBreak: 'break-all' }}>
+                  {e.path}
+                </a>
+              ) : (
+                <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, color: C.muted, wordBreak: 'break-all' }}>{e.path}</span>
+              )}
               <span style={{ fontSize: 10.5, color: C.mutedDim, flexShrink: 0, whiteSpace: 'nowrap' }}>
-                {e.label} · {e.loc} loc
+                {e.label}
+                {e.loc != null ? ` · ${e.loc} loc` : ''}
               </span>
             </div>
           ))}
@@ -336,6 +382,9 @@ export function RepoCard({
       </Collapsible>
 
       <Collapsible title="How to run" icon={<PlayIcon />} defaultOpen={false}>
+        {data.howToRun.length === 0 && (
+          <p style={{ margin: 0, fontSize: 12, color: C.mutedDim }}>The README and manifests don&apos;t show how to run this project.</p>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {data.howToRun.map((step, i) => (
             <div key={i} style={{ fontSize: 12.5, color: C.textSub, lineHeight: 1.6 }}>
@@ -353,8 +402,26 @@ export function RepoCard({
       </div>
 
       <Collapsible title="Good first issues" icon={<BranchIcon />}>
-        <GoodFirstIssueList issues={data.goodFirstIssues} onSelect={onSelectIssue} />
+        {data.goodFirstIssues ? (
+          <GoodFirstIssueList issues={data.goodFirstIssues} onSelect={onSelectIssue} />
+        ) : (
+          <p style={{ margin: 0, fontSize: 12, color: C.mutedDim }}>
+            {data.goodFirstIssuesError === 'GITHUB_RATE_LIMITED'
+              ? 'GitHub is rate-limiting GitGuide, so open issues could not be loaded right now.'
+              : 'Open issues could not be loaded right now.'}
+          </p>
+        )}
       </Collapsible>
+
+      {data.meta && (
+        <SourceNote>
+          Based on {data.meta.ref} @ {shortSha(data.meta.commitSha)} · README{data.meta.hasReadme ? (data.meta.readmeTruncated ? ' (beginning only)' : '') : ' not found'} ·{' '}
+          {data.meta.filesShownToModel < data.meta.filesInTree
+            ? `${data.meta.filesShownToModel} of ${data.meta.filesInTree} file paths`
+            : `all ${data.meta.filesInTree} file paths`}
+          {data.meta.treeTruncated ? ' (GitHub truncated the file list)' : ''}. File contents were not read.
+        </SourceNote>
+      )}
     </div>
   );
 }
@@ -397,6 +464,12 @@ export function QuickFilePreview({ data }: { data: ExplainFileQuickResult }) {
 export function FileCard({ data }: { data: ExplainFileResult }) {
   return (
     <div>
+      {data.meta?.truncated && (
+        <Notice>
+          Only the first {data.meta.analyzedChars.toLocaleString()} of {data.meta.totalChars.toLocaleString()} characters of this file were analyzed.
+          Parts of the file after that are not covered.
+        </Notice>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div>
           <p style={{ margin: '0 0 6px', fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.5 }}>{data.purpose}</p>
@@ -462,11 +535,21 @@ export function FileCard({ data }: { data: ExplainFileResult }) {
             {data.relatedFiles.map((f, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0' }}>
                 <FileGlyph />
-                <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, color: C.muted, wordBreak: 'break-all' }}>{f}</span>
+                <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, color: C.muted, wordBreak: 'break-all' }}>
+                  {f.path}
+                  <VerifiedTag verified={f.verified} />
+                </span>
               </div>
             ))}
           </div>
         </Collapsible>
+      )}
+
+      {data.meta && (
+        <SourceNote>
+          Based on {data.meta.ref} @ {shortSha(data.meta.commitSha)} · {data.meta.lines.toLocaleString()} lines. Statements about how other files use this one
+          are inferred, not verified.
+        </SourceNote>
       )}
     </div>
   );
@@ -536,7 +619,11 @@ export function IssueCard({ data }: { data: AnalysisResult }) {
         </Collapsible>
       )}
 
-      <Collapsible title="Relevant files" icon={<CodeIcon />} defaultOpen={false}>
+      <Collapsible title="Possibly relevant files" icon={<CodeIcon />} defaultOpen={false}>
+        <p style={{ margin: '0 0 8px', fontSize: 11, color: C.mutedDim, lineHeight: 1.5 }}>
+          Suggestions based on the issue text and file names; GitGuide did not read these files.
+        </p>
+        {data.relevantFiles.length === 0 && <p style={{ margin: 0, fontSize: 12, color: C.mutedDim }}>No files could be matched to this issue.</p>}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {data.relevantFiles.map((file, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -544,6 +631,7 @@ export function IssueCard({ data }: { data: AnalysisResult }) {
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: C.muted, wordBreak: 'break-all', marginBottom: 2 }}>
                   {file.path}
+                  <VerifiedTag verified={file.verified} />
                 </div>
                 <div style={{ fontSize: 11, color: C.mutedDim, lineHeight: 1.5 }}>{file.reason}</div>
               </div>
@@ -593,12 +681,19 @@ export function IssueCard({ data }: { data: AnalysisResult }) {
 
       <Collapsible title="Risks & testing" icon={<AlertIcon />} defaultOpen={false}>
         <p style={{ margin: '0 0 6px', fontSize: 12.5, color: C.textSub, lineHeight: 1.6 }}>
-          <strong style={{ color: C.text, fontWeight: 600 }}>Risks:</strong> {data.risks}
+          <strong style={{ color: C.text, fontWeight: 600 }}>Risks:</strong> {data.risks || 'Not described.'}
         </p>
         <p style={{ margin: 0, fontSize: 12.5, color: C.textSub, lineHeight: 1.6 }}>
-          <strong style={{ color: C.text, fontWeight: 600 }}>Testing:</strong> {data.testingConsiderations}
+          <strong style={{ color: C.text, fontWeight: 600 }}>Testing:</strong> {data.testingConsiderations || 'Not described.'}
         </p>
       </Collapsible>
+
+      {data.meta && (
+        <SourceNote>
+          Based on issue #{data.meta.issueNumber} ({data.meta.state}) with {data.meta.commentsIncluded} of {data.meta.commentsTotal} comments, read from GitHub. File
+          suggestions were checked against {data.meta.ref} @ {shortSha(data.meta.commitSha)}.
+        </SourceNote>
+      )}
     </div>
   );
 }

@@ -1,100 +1,171 @@
 import { API_BASE_URL } from '../config';
+import { createSseParser } from './sse';
+import { API_PORT_NAME, isApiRelayRequest, relayApiRequest } from './api-relay';
 
 interface StreamEvent {
   type: string;
   [key: string]: unknown;
 }
 
+/** No bytes at all (not even the server's 15s heartbeat) for this long = stalled. */
+export const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+async function errorEventFromResponse(response: Response): Promise<StreamEvent> {
+  let body: { code?: unknown; error?: unknown; retryAfterSec?: unknown } = {};
+  try {
+    body = await response.json();
+  } catch {
+    // Non-JSON error page (e.g. a proxy) — fall back to the status code.
+  }
+  return {
+    type: 'error',
+    code: typeof body.code === 'string' ? body.code : response.status === 429 ? 'RATE_LIMITED' : 'SERVER_ERROR',
+    message: typeof body.error === 'string' ? body.error : `The GitGuide server returned an error (HTTP ${response.status}).`,
+    ...(typeof body.retryAfterSec === 'number' ? { retryAfterSec: body.retryAfterSec } : {}),
+  };
+}
+
 /**
- * Reads an SSE response body and relays each parsed `data: ` line back over `port`,
- * stopping after a 'done' or 'error' event — content scripts can't use EventSource
- * against a POST body, so this hand-rolled reader is what makes streaming possible at
- * all.
+ * Relays the API's SSE stream over `port`. Exactly one terminal event is always sent
+ * (unless the port went away first): the server's own `done`/`error`, or a synthesized
+ * error when the stream breaks — malformed data, a stall, or EOF before `done`. An
+ * incomplete stream is never reported as success.
  *
- * `signal` is aborted the moment the client-side port disconnects (panel closed, user
- * navigated to a different repo, tab closed) — passed straight to `fetch` so the
- * backend's own `res.on('close', ...)` fires and stops paying for tokens no one is
- * listening for anymore, instead of streaming to completion for an abandoned request.
+ * `signal` is aborted when the panel disconnects the port (Stop, navigation, tab
+ * closed); passing it to fetch makes the server see the disconnect and stop generating.
  */
-async function streamSse(port: chrome.runtime.Port, apiPath: string, body: unknown, signal: AbortSignal): Promise<void> {
-  // Once the port has disconnected, calling postMessage on it throws — every send in
-  // this function (including the catch block below) goes through here so that can
-  // never happen, rather than checking signal.aborted at every call site individually.
+export async function streamSse(port: chrome.runtime.Port, apiPath: string, body: unknown, signal: AbortSignal): Promise<void> {
   const send = (event: StreamEvent) => {
     if (!signal.aborted) port.postMessage(event);
   };
 
+  const idle = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => idle.abort(), STREAM_IDLE_TIMEOUT_MS);
+  };
+
+  let streamStarted = false;
   try {
+    resetIdle();
     const response = await fetch(`${API_BASE_URL}${apiPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify(body),
-      signal,
+      signal: AbortSignal.any([signal, idle.signal]),
+      credentials: 'omit',
     });
 
-    if (!response.ok || !response.body) {
-      send({ type: 'error', message: `HTTP ${response.status}` } satisfies StreamEvent);
+    if (!response.ok) {
+      send(await errorEventFromResponse(response));
+      return;
+    }
+    if (!response.body) {
+      send({ type: 'error', code: 'STREAM_INTERRUPTED', message: 'The answer stream could not be opened.' });
       return;
     }
 
+    streamStarted = true;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    const parser = createSseParser();
+
+    const handlePayloads = (payloads: string[]): boolean => {
+      for (const payload of payloads) {
+        let event: unknown;
+        try {
+          event = JSON.parse(payload);
+        } catch {
+          send({ type: 'error', code: 'MALFORMED_STREAM', message: 'The GitGuide server sent a response that could not be read.' });
+          return true;
+        }
+        if (typeof event !== 'object' || event === null || typeof (event as StreamEvent).type !== 'string') {
+          send({ type: 'error', code: 'MALFORMED_STREAM', message: 'The GitGuide server sent a response that could not be read.' });
+          return true;
+        }
+        send(event as StreamEvent);
+        const type = (event as StreamEvent).type;
+        if (type === 'done' || type === 'error') return true;
+      }
+      return false;
+    };
 
     while (true) {
-      if (signal.aborted) return; // port disconnected — stop reading and exit quietly
+      if (signal.aborted) return;
       const { done, value } = await reader.read();
       if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data: ')) continue;
-
-        const jsonStr = trimmed.slice(6).trim();
-        if (!jsonStr) continue;
-
-        try {
-          const event = JSON.parse(jsonStr) as StreamEvent;
-          send(event);
-          if (event.type === 'done' || event.type === 'error') return;
-        } catch {
-          // skip malformed SSE line
-        }
+      resetIdle();
+      if (handlePayloads(parser.push(decoder.decode(value, { stream: true })))) {
+        await reader.cancel().catch(() => {});
+        return;
       }
     }
+    if (handlePayloads(parser.push(decoder.decode()).concat(parser.end()))) return;
 
-    send({ type: 'done' } satisfies StreamEvent);
-  } catch (err) {
-    // An aborted fetch/read rejects with an AbortError here — that's an expected
-    // consequence of the port disconnecting, not a real failure, so exit quietly
-    // rather than trying to report it (send() would no-op anyway, but this skips
-    // building the message at all).
-    if (signal.aborted) return;
+    // EOF without a terminal event: the answer was cut off.
+    send({ type: 'error', code: 'STREAM_INTERRUPTED', message: 'The answer was cut off before it finished. You can retry.' });
+  } catch {
+    if (signal.aborted) return; // the panel went away — nothing to report to
+    if (idle.signal.aborted) {
+      send({ type: 'error', code: 'UPSTREAM_TIMEOUT', message: 'The answer stalled. Please try again.' });
+      return;
+    }
+    if (streamStarted) {
+      // The connection dropped after the answer had started arriving.
+      send({ type: 'error', code: 'STREAM_INTERRUPTED', message: 'The answer was cut off before it finished. You can retry.' });
+      return;
+    }
     send({
       type: 'error',
-      message: err instanceof Error ? err.message : 'Connection failed. Is the API running?',
-    } satisfies StreamEvent);
+      code: 'API_UNREACHABLE',
+      message: "Couldn't reach the GitGuide server. Check your connection — if the server was idle it can take up to a minute to start.",
+    });
+  } finally {
+    clearTimeout(idleTimer);
   }
 }
 
+/** Accepts chat requests only from this extension's own content scripts on github.com. */
+export function isTrustedSender(port: chrome.runtime.Port): boolean {
+  const sender = port.sender;
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  const url = sender.url ?? sender.tab?.url ?? '';
+  return url.startsWith('https://github.com/');
+}
+
+function isChatRequest(msg: unknown): boolean {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as { question?: unknown; context?: { repoOwner?: unknown; repoName?: unknown } };
+  return typeof m.question === 'string' && typeof m.context?.repoOwner === 'string' && typeof m.context?.repoName === 'string';
+}
+
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'chat-stream') return;
+  if (port.name !== API_PORT_NAME || !isTrustedSender(port)) return;
+  const controller = new AbortController();
+  port.onDisconnect.addListener(() => controller.abort());
+  let started = false;
+  port.onMessage.addListener((msg) => {
+    if (started || !isApiRelayRequest(msg)) return;
+    started = true;
+    void relayApiRequest(port, msg, controller.signal);
+  });
+});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'chat-stream' || !isTrustedSender(port)) return;
 
   const controller = new AbortController();
   port.onDisconnect.addListener(() => controller.abort());
 
+  let started = false;
   port.onMessage.addListener((msg) => {
-    // streamSse already turns every expected failure (HTTP error, network error,
-    // malformed SSE line) into a posted 'error' event and never rethrows — this outer
-    // catch only guards against something truly unexpected, since onMessage's listener
-    // return value is otherwise ignored and an unswallowed rejection here would surface
-    // as an unhandled promise rejection in the service worker.
-    streamSse(port, '/v1/ask-repo', msg, controller.signal).catch((err) => {
-      console.error('chat-stream: unexpected failure', err);
+    // One question per port; a second message on the same port is ignored.
+    if (started || !isChatRequest(msg)) return;
+    started = true;
+    streamSse(port, '/v1/ask-repo', msg, controller.signal).catch(() => {
+      // streamSse reports every failure as an event; this only guards against an
+      // unexpected throw surfacing as an unhandled rejection in the worker.
     });
   });
 });

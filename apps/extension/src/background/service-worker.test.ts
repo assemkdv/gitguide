@@ -1,196 +1,164 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createMockPort, flush, MockPort } from '../test/chrome-mock';
 
-function makePort(name: string) {
-  const messages: any[] = [];
-  const listeners: Array<(msg: any) => void> = [];
-  const disconnectListeners: Array<() => void> = [];
-  let disconnected = false;
-  return {
-    name,
-    postMessage: (msg: any) => {
-      // Mirrors real chrome.runtime.Port behavior: posting to an already-disconnected
-      // port throws, rather than silently no-op'ing — this is what makes it possible to
-      // assert the production code never calls postMessage after disconnect.
-      if (disconnected) throw new Error('Attempting to use a disconnected port object');
-      messages.push(msg);
-    },
-    onMessage: { addListener: (fn: any) => listeners.push(fn) },
-    onDisconnect: { addListener: (fn: () => void) => disconnectListeners.push(fn) },
-    disconnect: () => {},
-    send: (msg: any) => listeners.forEach((fn) => fn(msg)),
-    // Simulates the runtime firing onDisconnect (the panel closed, the user switched
-    // repos, the tab closed) — not something a test can trigger via `disconnect()`
-    // alone, since that's the client-initiated side of the same event.
-    triggerDisconnect: () => {
-      disconnected = true;
-      disconnectListeners.forEach((fn) => fn());
-    },
-    messages,
-  };
-}
-
-function installChromeRuntimeMock() {
-  const connectListeners: Array<(port: any) => void> = [];
-  (globalThis as any).chrome = {
-    runtime: {
-      onConnect: { addListener: (fn: any) => connectListeners.push(fn) },
-    },
-  };
-  return {
-    fireConnect: (port: any) => connectListeners.forEach((fn) => fn(port)),
-    listenerCount: () => connectListeners.length,
-  };
-}
-
-function makeFakeBody(sseChunks: string[]) {
+function streamResponse(chunks: string[], { hang = false } = {}): Response {
   const encoder = new TextEncoder();
-  let i = 0;
-  return {
-    getReader: () => ({
-      read: async () => {
-        if (i < sseChunks.length) {
-          const value = encoder.encode(sseChunks[i]);
-          i++;
-          return { done: false, value };
-        }
-        return { done: true, value: undefined };
-      },
-    }),
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      if (!hang) controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+let connectListeners: Array<(port: chrome.runtime.Port) => void>;
+let streamSse: typeof import('./service-worker').streamSse;
+
+beforeEach(async () => {
+  connectListeners = [];
+  (globalThis as any).chrome = {
+    runtime: { id: 'ext-id', onConnect: { addListener: (fn: any) => connectListeners.push(fn) } },
   };
+  vi.resetModules();
+  ({ streamSse } = await import('./service-worker'));
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+function connect(overrides: Partial<{ name: string; sender: unknown }> = {}): MockPort {
+  const port = createMockPort(overrides.name ?? 'chat-stream') as MockPort & { sender?: unknown };
+  port.sender = 'sender' in overrides ? overrides.sender : { id: 'ext-id', url: 'https://github.com/owner/repo' };
+  connectListeners.forEach((fn) => fn(port as unknown as chrome.runtime.Port));
+  return port;
 }
 
-// Lets the handler's chain of awaits over the fake reader fully settle before we assert
-// on the port's received messages.
-async function flush() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+const request = { question: 'q', context: { repoOwner: 'o', repoName: 'r' }, history: [] };
+
+async function run(response: Response | Promise<Response>): Promise<unknown[]> {
+  vi.stubGlobal('fetch', vi.fn(async () => response));
+  const port = createMockPort('chat-stream');
+  await streamSse(port as unknown as chrome.runtime.Port, '/v1/ask-repo', request, new AbortController().signal);
+  return port.posted;
 }
 
-describe('service-worker SSE relay', () => {
-  let runtimeMock: ReturnType<typeof installChromeRuntimeMock>;
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.unstubAllGlobals();
-    runtimeMock = installChromeRuntimeMock();
+describe('service worker chat relay', () => {
+  it('relays events in order and stops after done', async () => {
+    const posted = await run(
+      streamResponse([
+        'data: {"type":"status","index":{}}\n\n',
+        'data: {"type":"citations","citations":[]}\n\ndata: {"type":"chu',
+        'nk","content":"Hi"}\n\n: keep-alive\n\n',
+        'data: {"type":"done","finishReason":"stop"}\n\ndata: {"type":"chunk","content":"after done"}\n\n',
+      ]),
+    );
+    expect(posted.map((e: any) => e.type)).toEqual(['status', 'citations', 'chunk', 'done']);
   });
 
-  it('registers a single onConnect listener for chat-stream', async () => {
-    await import('./service-worker');
-    expect(runtimeMock.listenerCount()).toBe(1);
+  it('reports EOF before done as an interruption, never as success', async () => {
+    const posted = await run(streamResponse(['data: {"type":"chunk","content":"partial"}\n\n']));
+    expect(posted.at(-1)).toMatchObject({ type: 'error', code: 'STREAM_INTERRUPTED' });
+    expect(posted.some((e: any) => e.type === 'done')).toBe(false);
   });
 
-  it('relays chat-stream events — citations and status before any answer chunk — in order', async () => {
+  it('accepts a final done event that lacks the trailing blank line', async () => {
+    const posted = await run(streamResponse(['data: {"type":"chunk","content":"x"}\n\ndata: {"type":"done"}']));
+    expect(posted.at(-1)).toEqual({ type: 'done' });
+  });
+
+  it('reports malformed event data as an error and stops', async () => {
+    const posted = await run(streamResponse(['data: {"type":"chunk","content":"x"}\n\ndata: {not json\n\ndata: {"type":"done"}\n\n']));
+    expect(posted.map((e: any) => e.type)).toEqual(['chunk', 'error']);
+    expect(posted.at(-1)).toMatchObject({ code: 'MALFORMED_STREAM' });
+  });
+
+  it('passes through the structured error from a non-OK response', async () => {
+    const posted = await run(
+      new Response(JSON.stringify({ error: 'Too many requests', code: 'RATE_LIMITED', retryAfterSec: 900 }), { status: 429 }),
+    );
+    expect(posted).toEqual([{ type: 'error', code: 'RATE_LIMITED', message: 'Too many requests', retryAfterSec: 900 }]);
+  });
+
+  it('handles a non-JSON error page', async () => {
+    const posted = await run(new Response('<html>Bad Gateway</html>', { status: 502 }));
+    expect(posted[0]).toMatchObject({ type: 'error', code: 'SERVER_ERROR' });
+  });
+
+  it('reports a connection dropped mid-answer as an interruption, not as an unreachable server', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"chunk","content":"half"}\n\n'));
+        setTimeout(() => controller.error(new TypeError('network error')), 5);
+      },
+    });
+    const posted = await run(new Response(body));
+    expect(posted.map((e: any) => e.type)).toEqual(['chunk', 'error']);
+    expect(posted.at(-1)).toMatchObject({ code: 'STREAM_INTERRUPTED' });
+  });
+
+  it('reports an unreachable API', async () => {
+    const posted = await run(Promise.reject(new TypeError('Failed to fetch')));
+    expect(posted).toEqual([expect.objectContaining({ type: 'error', code: 'API_UNREACHABLE' })]);
+  });
+
+  it('times out a stalled stream', async () => {
+    vi.useFakeTimers();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => {
-        expect(url).toBe('http://localhost:3000/v1/ask-repo');
-        return {
-          ok: true,
-          body: makeFakeBody([
-            'data: {"type":"citations","citations":[{"path":"src/auth.ts","startLine":1,"endLine":10,"url":"https://github.com/o/r/blob/main/src/auth.ts#L1-L10"}]}\n\n',
-            'data: {"type":"status","indexing":"partial"}\n\n',
-            'data: {"type":"chunk","content":"It is in "}\n\n',
-            'data: {"type":"done"}\n\n',
-          ]),
-        };
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"type":"chunk","content":"x"}\n\n'));
+            init.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+          },
+        });
+        return new Response(body);
       }),
     );
-
-    await import('./service-worker');
-    const port = makePort('chat-stream');
-    runtimeMock.fireConnect(port);
-    port.send({ question: 'where is auth', context: { repoOwner: 'o', repoName: 'r' } });
-
-    await flush();
-
-    expect(port.messages.map((m: any) => m.type)).toEqual(['citations', 'status', 'chunk', 'done']);
-    expect(port.messages[0].citations[0].path).toBe('src/auth.ts');
+    const port = createMockPort('chat-stream');
+    const done = streamSse(port as unknown as chrome.runtime.Port, '/v1/ask-repo', request, new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await done;
+    expect(port.posted.at(-1)).toMatchObject({ type: 'error', code: 'UPSTREAM_TIMEOUT' });
   });
 
-  it('ignores a connection whose port name does not match', async () => {
-    const fetchMock = vi.fn();
+  it('aborts the request when the panel disconnects and never posts afterwards', async () => {
+    let fetchSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        fetchSignal = init.signal as AbortSignal;
+        return streamResponse(['data: {"type":"chunk","content":"x"}\n\n'], { hang: true });
+      }),
+    );
+    const port = connect();
+    port.emit(request);
+    await flush();
+    port.remoteDisconnect();
+    await flush();
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(port.posted.map((e: any) => e.type)).toEqual(['chunk']);
+  });
+
+  it('ignores other port names, untrusted senders, malformed requests, and repeat messages', async () => {
+    const fetchMock = vi.fn(async () => streamResponse(['data: {"type":"done"}\n\n']));
     vi.stubGlobal('fetch', fetchMock);
 
-    await import('./service-worker');
-    const port = makePort('something-else');
-    runtimeMock.fireConnect(port);
-    port.send({});
-
+    connect({ name: 'other' }).emit(request);
+    connect({ sender: { id: 'someone-else', url: 'https://github.com/x' } }).emit(request);
+    connect({ sender: { id: 'ext-id', url: 'https://evil.example/' } }).emit(request);
+    connect().emit({ question: 42 });
     await flush();
     expect(fetchMock).not.toHaveBeenCalled();
-  });
 
-  it('sends a single error event on a non-ok HTTP response', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, body: null })));
-
-    await import('./service-worker');
-    const port = makePort('chat-stream');
-    runtimeMock.fireConnect(port);
-    port.send({ question: 'q', context: { repoOwner: 'o', repoName: 'r' } });
-
+    const port = connect();
+    port.emit(request);
+    port.emit(request);
     await flush();
-    expect(port.messages).toEqual([{ type: 'error', message: 'HTTP 500' }]);
-  });
-
-  it('aborts the underlying fetch when the port disconnects, and never posts to it again', async () => {
-    const seenSignals: AbortSignal[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((_url: string, init?: RequestInit) => {
-        const signal = init?.signal as AbortSignal;
-        seenSignals.push(signal);
-        // Never resolves on its own — mirrors an in-flight request with no response
-        // yet, so the only way this promise settles is via the abort below.
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-        });
-      }),
-    );
-
-    await import('./service-worker');
-    const port = makePort('chat-stream');
-    runtimeMock.fireConnect(port);
-    port.send({ question: 'q', context: { repoOwner: 'o', repoName: 'r' } });
-    await flush();
-
-    expect(seenSignals).toHaveLength(1);
-    expect(seenSignals[0].aborted).toBe(false);
-
-    port.triggerDisconnect();
-    await flush();
-
-    expect(seenSignals[0].aborted).toBe(true);
-    expect(port.messages).toEqual([]); // no 'error' (or any other) event posted to a dead port
-  });
-
-  it('does not produce an unhandled promise rejection when the port disconnects mid-stream', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((_url: string, init?: RequestInit) => {
-        const signal = init?.signal as AbortSignal;
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-        });
-      }),
-    );
-
-    const onUnhandledRejection = vi.fn();
-    process.on('unhandledRejection', onUnhandledRejection);
-
-    try {
-      await import('./service-worker');
-      const port = makePort('chat-stream');
-      runtimeMock.fireConnect(port);
-      port.send({ question: 'q', context: { repoOwner: 'o', repoName: 'r' } });
-      await flush();
-
-      port.triggerDisconnect();
-      await flush();
-      await flush(); // extra settle time for any stray rejection microtask
-
-      expect(onUnhandledRejection).not.toHaveBeenCalled();
-    } finally {
-      process.off('unhandledRejection', onUnhandledRejection);
-    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
